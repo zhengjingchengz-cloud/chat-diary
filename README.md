@@ -207,18 +207,41 @@
 
 ```
 聊天日记/
-├── index.html            入口
+├── index.html            入口（资源带内容指纹 ?v=xxxx）
 ├── 打开聊天日记.bat        Windows 快捷入口
 ├── assets/
 │   ├── core.js           数据层：增删改查、搜索、记忆包、聊天记录解析、草稿生成
 │   ├── ai.js             DeepSeek 客户端：摘要、对话、错误翻译
 │   └── app.js            界面：渲染、事件、弹窗
+├── tools/
+│   └── stamp.js          给 index.html 的资源加版本号（部署前跑）
 ├── tests/
 │   ├── core.test.js      单元测试 31 项
 │   ├── ai.test.js        单元测试 6 项
 │   └── e2e.html          浏览器交互测试 73 项
 └── screenshots/
 ```
+
+### 缓存与更新（为什么要加 `?v=`）
+
+浏览器会把 JS/CSS 缓存起来，改了代码普通刷新可能还是旧的。所以 `index.html` 里的资源引用带一个**内容指纹**：
+
+```html
+<script src="assets/app.js?v=c2699e18"></script>
+```
+
+版本号是文件内容的 sha1 前 8 位：
+
+- 文件没改 → 版本号不变 → 继续吃缓存，打开快。
+- 文件改了 → 版本号变 → 浏览器必须重新下载，**普通刷新就能看到新版**，不用再按 Ctrl+F5。
+
+每次改完代码，部署前跑一次：
+
+```bash
+node tools/stamp.js     # 重写 index.html 里的 ?v=
+```
+
+它只改 `index.html`，幂等，跑几次结果都一样。
 
 ---
 
