@@ -80,3 +80,26 @@ test('角色取名结果会被清洗：去空格引号、限长、emoji 兜底',
 
   assert.deepEqual(AI.normalizeCompanion(null), { name: '', emoji: '🐟', persona: '' });
 });
+
+test('自我记录的结果会被清洗：心情兜底、记忆最多 2 条', () => {
+  const r = AI.normalizeSelfWrite({
+    title: '  ',
+    mood: '胡说八道',
+    body: '今天没人说话。',
+    memories: [
+      { kind: '乱写', text: '  记得它怕黑  ' },
+      { kind: '喜好', text: '' },
+      { kind: '约定', text: '第三条应该被截掉' }
+    ]
+  });
+  assert.equal(r.title, '写给自己的');
+  assert.equal(r.mood, '平静');
+  assert.equal(r.memories.length, 2, '最多两条');
+  assert.equal(r.memories[0].kind, '事实', '非法分类回落到「事实」');
+  assert.equal(r.memories[0].text, '记得它怕黑');
+
+  const long = AI.normalizeSelfWrite({ body: 'x'.repeat(5000), title: 't'.repeat(80) });
+  assert.equal(long.body.length, 1200);
+  assert.equal(long.title.length, 40);
+  assert.deepEqual(long.memories, []);
+});
