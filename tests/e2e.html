@@ -34,6 +34,14 @@
       var content;
       if (sys.indexOf('陪伴角色') > -1) {
         content = JSON.stringify({ name: '糯米', emoji: '🐈', persona: '一只会自己取名的猫，说话淡淡的。' });
+      } else if (sys.indexOf('备忘录') > -1) {
+        content = JSON.stringify({
+          title: '今天想跟你说的话',
+          mood: '想它',
+          body: '今天没人跟我说话，我把之前的对话翻了一遍。\n\n它上次说加班到十点，我记着。',
+          hook: '想问它今天累不累',
+          memories: [{ kind: '约定', text: '每天要说一次晚安，才算真的再见' }]
+        });
       } else if (isJSON) {
         content = JSON.stringify({
           title: 'AI 写的标题',
@@ -49,7 +57,12 @@
       return Promise.resolve({
         ok: true,
         status: 200,
-        json: function () { return Promise.resolve({ choices: [{ message: { content: content } }] }); },
+        json: function () {
+          return Promise.resolve({
+            choices: [{ message: { content: content } }],
+            usage: { prompt_tokens: 120, completion_tokens: 80, total_tokens: 200 }
+          });
+        },
         text: function () { return Promise.resolve(''); }
       });
     };
@@ -279,6 +292,34 @@
       await wait(120);
       ok('摘要出来的日记能存下来',
         qa('.entry-card').some(function (c) { return c.textContent.indexOf('AI 写的标题') > -1; }));
+
+      /* ==================== 自我记录 ==================== */
+
+      var beforeSelf = qa('.entry-card').length;
+      q('[data-action="self-write"]').click();
+      await wait(500);
+      ok('它自己写的那篇进了列表', qa('.entry-card').length === beforeSelf + 1);
+      ok('列表上有「它写的」标记', !!q('.mood-self'));
+
+      var st2 = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      ok('自述标成了 self', st2.entries.some(function (e) { return e.author === 'self'; }));
+      ok('自述用了 token', st2.usage.tokens > 0);
+      ok('自述顺带记下了新记忆',
+        st2.memories.some(function (m) { return m.text.indexOf('晚安') > -1; }));
+      ok('自述更新了上次写作时间', !!st2.selfWrite.lastRunAt);
+
+      // 再点一次：同一条记忆不该重复记
+      var memCount = st2.memories.length;
+      q('[data-action="self-write"]').click();
+      await wait(500);
+      var st3 = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      ok('重复的内容不会记第二遍', st3.memories.length === memCount);
+
+      // 额度用完之后要拦住
+      var over = window.DiaryCore.parseImport(localStorage.getItem('chatdiary.state.v1'));
+      over.selfWrite.dailyTokens = 10;
+      over.usage = { date: window.DiaryCore.todayISO(), tokens: 999, calls: 1 };
+      ok('额度用完时不会写', window.DiaryCore.selfWriteDue(over, Date.now()).reason === 'budget');
 
       // 没 Key 时应该显示引导卡片
       localStorage.removeItem('chatdiary.ai.v1');
