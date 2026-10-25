@@ -372,6 +372,52 @@
     }).then(function (text) { return normalizeSelfWrite(extractJSON(text)); });
   }
 
+  /**
+   * 它主动开口（很久没聊时）。
+   * @param {{companion, memories, chat, hours, onUsage?}} p
+   */
+  function opener(p) {
+    var memoryLines = (p.memories || []).slice(0, 8).map(function (m) {
+      return '- [' + m.kind + '] ' + m.text;
+    }).join('\n');
+
+    var lastChat = (p.chat || []).slice(-6).map(function (m) {
+      return (m.role === 'user' ? '对方' : '我') + '：' + m.text;
+    }).join('\n');
+
+    var system = '你是「' + p.companion.name + '」' +
+      (p.companion.persona ? '：' + p.companion.persona : '。') +
+      ' 现在你主动开口找对方说话。只输出 1-2 句中文，不要 JSON，不要旁白。';
+
+    var user = [
+      '【你记得的事】',
+      memoryLines || '（还没有什么特别的记忆）',
+      lastChat ? '\n【你们上次聊到】\n' + lastChat : '',
+      '',
+      '距离你们上次说话，已经过去大约 ' + (p.hours || 12) + ' 小时了。请你先开口。要求：',
+      '- 1-2 句，短，像微信消息，别写成客套的问候模板。',
+      '- 不要每次都问「在吗」「在干嘛」；不要重复上次说过的话。',
+      '- 可以提一件你记得的小事、说一个自己突然冒出来的念头、或者留一句有点笨但真心的话。',
+      '- 不要解释自己为什么说话，不要提「你很久没来了」。'
+    ].filter(Boolean).join('\n');
+
+    return request([
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ], { temperature: 1.15, maxTokens: 120, onUsage: p.onUsage })
+      .then(function (text) {
+        return String(text || '')
+          .replace(/^["「『]|["」』]$/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 120);
+      })
+      .then(function (text) {
+        if (!text) throw new Error('它没想好说什么');
+        return text;
+      });
+  }
+
   return {
     DEFAULTS: DEFAULTS,
     loadConfig: loadConfig,
@@ -385,6 +431,7 @@
     summarize: summarize,
     suggestCompanion: suggestCompanion,
     selfWrite: selfWrite,
+    opener: opener,
     reply: reply,
     test: test
   };
