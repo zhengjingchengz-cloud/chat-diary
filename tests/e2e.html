@@ -29,17 +29,23 @@
     window.fetch = function (url, opts) {
       var body = JSON.parse((opts && opts.body) || '{}');
       fakeCalls.push({ url: url, body: body });
+      var sys = (body.messages && body.messages[0] && body.messages[0].content) || '';
       var isJSON = !!(body.response_format && body.response_format.type === 'json_object');
-      var content = isJSON
-        ? JSON.stringify({
-            title: 'AI 写的标题',
-            mood: '心动',
-            tags: ['AI标签', '晚安'],
-            body: 'AI 整理的正文，写得很具体。',
-            quotes: [{ speaker: '鱼鱼', text: 'AI 抄下来的原话' }],
-            hook: '下次再问它'
-          })
-        : '咕噜咕噜，我在。';
+      var content;
+      if (sys.indexOf('陪伴角色') > -1) {
+        content = JSON.stringify({ name: '糯米', emoji: '🐈', persona: '一只会自己取名的猫，说话淡淡的。' });
+      } else if (isJSON) {
+        content = JSON.stringify({
+          title: 'AI 写的标题',
+          mood: '心动',
+          tags: ['AI标签', '晚安'],
+          body: 'AI 整理的正文，写得很具体。',
+          quotes: [{ speaker: '鱼鱼', text: 'AI 抄下来的原话' }],
+          hook: '下次再问它'
+        });
+      } else {
+        content = '咕噜咕噜，我在。';
+      }
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -167,6 +173,29 @@
       await wait(60);
       var cf = q('form[data-form="companion"]');
       ok('打开新建伙伴弹窗', !!cf);
+
+      // 让它自己取名（走假 fetch，验证 请求→JSON→填表 整条链路）
+      q('[data-action="suggest-name"]').click();
+      await wait(350);
+      ok('它给自己取了名字', cf.elements.name.value === '糯米');
+      ok('取名时顺手写了设定', cf.elements.persona.value.indexOf('会自己取名') > -1);
+      ok('取名时顺手换了头像', cf.elements.emoji.value === '🐈');
+      ok('取名后弹窗还开着', !!q('form[data-form="companion"]'));
+
+      var nameCall = fakeCalls.filter(function (c) {
+        var s = (c.body.messages && c.body.messages[0] && c.body.messages[0].content) || '';
+        return s.indexOf('陪伴角色') > -1;
+      })[0];
+      ok('取名请求要求 JSON 输出', !!nameCall && nameCall.body.response_format.type === 'json_object');
+
+      // 设定有可选项
+      var presets = qa('.preset-chips .chip');
+      ok('一句设定有预设可选', presets.length >= 4);
+      presets[0].click();
+      await wait(50);
+      ok('点预设会填进设定框', cf.elements.persona.value.indexOf('大肥鱼') > -1);
+      ok('选中的预设会高亮', presets[0].classList.contains('on'));
+
       cf.elements.name.value = '测试伙伴';
       q('.emoji-pick[data-emoji="🦊"]').click();
       ok('选头像写进隐藏字段', cf.elements.emoji.value === '🦊');
@@ -228,7 +257,10 @@
       ok('AI 精修替换了草稿', q('.imp-preview h4').textContent === 'AI 写的标题');
       ok('AI 草稿带上了标签', q('.imp-preview .chips').textContent.indexOf('AI标签') > -1);
 
-      var sumCall = fakeCalls.filter(function (c) { return c.body.response_format; })[0];
+      var sumCall = fakeCalls.filter(function (c) {
+        var s = (c.body.messages && c.body.messages[0] && c.body.messages[0].content) || '';
+        return c.body.response_format && s.indexOf('整理聊天日记') > -1;
+      })[0];
       ok('摘要请求要求 JSON', !!sumCall && sumCall.body.response_format.type === 'json_object');
       ok('摘要请求里带着记忆',
         !!sumCall && sumCall.body.messages[1].content.indexOf('吐泡泡') > -1);
