@@ -935,12 +935,12 @@
           '<button type="button" class="icon-btn" data-action="close-modal">✕</button>' +
         '</div>' +
         '<div class="modal-body">' +
-          '<div class="field"><span>怎么称呼它</span>' +
+          '<div class="field"><span>怎么称呼它（你说了算）</span>' +
             '<div class="input-with-btn">' +
-              '<input type="text" name="name" maxlength="24" value="" placeholder="比如：鱼鱼" autocomplete="off" required>' +
-              '<button type="button" class="btn line sm" data-action="suggest-name">🎲 让它自己取</button>' +
+              '<input type="text" name="name" maxlength="24" value="" placeholder="自己取一个，比如：鱼鱼" autocomplete="off" required>' +
+              '<button type="button" class="btn line sm" data-action="suggest-name">🎲 让它提一个</button>' +
             '</div>' +
-            '<span class="f-note">没想好？让它自己决定——名字、头像、设定它会一起想好。</span>' +
+            '<span class="f-note">名字永远由你定：想好了直接打上去。拿不定主意再让它提一个，提完照样能改。</span>' +
           '</div>' +
           '<div class="field"><span>挑个头像</span>' +
             '<div class="emoji-row" id="emoji-row">' +
@@ -1017,19 +1017,19 @@
     var hint = form.elements.persona.value.trim() || form.elements.name.value.trim();
 
     function finish(c) {
-      if (btn) { btn.disabled = false; btn.textContent = '🎲 让它自己取'; }
+      if (btn) { btn.disabled = false; btn.textContent = '🎲 让它提一个'; }
       form.elements.name.value = c.name;
       if (c.persona) form.elements.persona.value = c.persona;
       applyEmoji(form, c.emoji);
       form.elements.name.focus();
       form.elements.name.select();
-      toast('它给自己取名叫「' + c.name + '」');
+      toast('它想叫「' + c.name + '」，不喜欢直接改');
     }
 
     function fallback(msg) {
-      if (btn) { btn.disabled = false; btn.textContent = '🎲 让它自己取'; }
+      if (btn) { btn.disabled = false; btn.textContent = '🎲 让它提一个'; }
       localCompanionIdea(form);
-      toast(msg || '先用本地想的名字');
+      toast(msg || '先借你一个名字，随时改');
     }
 
     if (btn) { btn.disabled = true; btn.textContent = '它正在想…'; }
