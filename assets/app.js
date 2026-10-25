@@ -10,7 +10,27 @@
   var LS_STATE = 'chatdiary.state.v1';
   var LS_DEMO = 'chatdiary.demo.v1';
 
-  var EMOJIS = ['🐟', '🌙', '🐰', '🌿', '🕯️', '🦊', '🐳', '☕', '🎐', '🍊', '🪐', '🧸'];
+  var EMOJIS = ['🐟', '🌙', '🐰', '🌿', '🕯️', '🦊', '🐳', '☕', '🎐', '🍊', '🪐', '🧸', '🐈', '🐶'];
+
+  /* 一句设定的预设。点一下就填进去，还能接着改。 */
+  var PERSONAS = [
+    { label: '爱撒娇的大肥鱼', emoji: '🐟', text: '一只住在手机里的大肥鱼，说话软软的，爱撒娇，饿了会浮上来讨吃的。' },
+    { label: '安静的夜班搭子', emoji: '🌙', text: '只在深夜上线，话不多，偶尔冒一句很准的，说完就消失。' },
+    { label: '毒舌但心软的猫', emoji: '🐈', text: '嘴上不饶人，其实很护着你；被夸会装作没听见，尾巴却翘起来。' },
+    { label: '元气小狗', emoji: '🐶', text: '永远精力旺盛，说话带感叹号；你难过时它会笨拙地转移话题。' },
+    { label: '温柔学姐', emoji: '🌿', text: '大你两届，讲话慢，习惯先问一句「今天吃饭了吗」，再讲道理。' },
+    { label: '一起加班的同事', emoji: '☕', text: '和你在同一个项目里熬过夜，说话干脆，爱吐槽老板，但从不劝你辞职。' }
+  ];
+
+  /* 没有 API Key 时的本地取名 */
+  var LOCAL_NAMES = [
+    { name: '糯米', emoji: '🍊', persona: '说话很慢，喜欢拿食物打比方，记得你每一次说饿。' },
+    { name: '阿灯', emoji: '🕯️', persona: '一盏不肯灭的小灯，你熬夜的时候它会碎碎念，但一直亮着。' },
+    { name: '年糕', emoji: '🐰', persona: '软乎乎的，被凶了也不生气，只会小声问「你是不是累了」。' },
+    { name: '小野', emoji: '🌿', persona: '常年在外面跑，讲起风景就停不下来，也会把你的话记在本子上。' },
+    { name: '布丁', emoji: '🧸', persona: '反应慢半拍，但你说过的事它都记着，偶尔突然翻出来问你。' },
+    { name: '阿眠', emoji: '🌙', persona: '专门管睡觉的，你一说困它就开始念，念到你真的去睡。' }
+  ];
 
   var state = null;
   var isDemo = false;
@@ -915,8 +935,13 @@
           '<button type="button" class="icon-btn" data-action="close-modal">✕</button>' +
         '</div>' +
         '<div class="modal-body">' +
-          '<label class="f"><span>怎么称呼它</span>' +
-            '<input type="text" name="name" maxlength="24" value="" placeholder="比如：鱼鱼" required></label>' +
+          '<div class="field"><span>怎么称呼它</span>' +
+            '<div class="input-with-btn">' +
+              '<input type="text" name="name" maxlength="24" value="" placeholder="比如：鱼鱼" autocomplete="off" required>' +
+              '<button type="button" class="btn line sm" data-action="suggest-name">🎲 让它自己取</button>' +
+            '</div>' +
+            '<span class="f-note">没想好？让它自己决定——名字、头像、设定它会一起想好。</span>' +
+          '</div>' +
           '<div class="field"><span>挑个头像</span>' +
             '<div class="emoji-row" id="emoji-row">' +
               EMOJIS.map(function (em, i) {
@@ -926,8 +951,17 @@
             '</div>' +
             '<input type="hidden" name="emoji" value="' + EMOJIS[0] + '">' +
           '</div>' +
-          '<label class="f"><span>一句设定（可选）</span>' +
-            '<input type="text" name="persona" maxlength="80" placeholder="一只住在手机里的大肥鱼，爱撒娇"></label>' +
+          '<div class="field"><span>一句设定（可选）</span>' +
+            '<div class="input-with-btn">' +
+              '<input type="text" name="persona" maxlength="80" value="" placeholder="点下面的预设，或者自己写一句">' +
+            '</div>' +
+            '<div class="chips preset-chips">' +
+              PERSONAS.map(function (p, i) {
+                return '<button type="button" class="chip" data-action="pick-persona" data-i="' + i + '">' +
+                  p.emoji + ' ' + esc(p.label) + '</button>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
           '<label class="f"><span>哪天认识的</span>' +
             '<input type="date" name="since" value="' + C.todayISO() + '"></label>' +
         '</div>' +
@@ -938,6 +972,75 @@
         '</div>' +
       '</form>'
     );
+  }
+
+  /** 把某个 emoji 选中；不在预设列表里就临时加一个 */
+  function applyEmoji(form, emoji) {
+    if (!emoji) return;
+    var row = byId('emoji-row');
+    if (!row) return;
+    var found = null;
+    $$('.emoji-pick', row).forEach(function (b) {
+      b.classList.remove('on');
+      if (b.getAttribute('data-emoji') === emoji) found = b;
+    });
+    if (!found) {
+      found = document.createElement('button');
+      found.type = 'button';
+      found.className = 'emoji-pick on';
+      found.setAttribute('data-action', 'pick-emoji');
+      found.setAttribute('data-emoji', emoji);
+      found.textContent = emoji;
+      row.appendChild(found);
+    } else {
+      found.classList.add('on');
+    }
+    form.elements.emoji.value = emoji;
+  }
+
+  function localCompanionIdea(form) {
+    var current = form.elements.name.value.trim();
+    var pool = LOCAL_NAMES.filter(function (x) { return x.name !== current; });
+    var pick = pool[Math.floor(Math.random() * pool.length)] || LOCAL_NAMES[0];
+    form.elements.name.value = pick.name;
+    form.elements.persona.value = pick.persona;
+    applyEmoji(form, pick.emoji);
+    form.elements.name.focus();
+    form.elements.name.select();
+    return pick;
+  }
+
+  function suggestName() {
+    var form = $('form[data-form="companion"]');
+    if (!form) return;
+    var btn = form.querySelector('[data-action="suggest-name"]');
+    var hint = form.elements.persona.value.trim() || form.elements.name.value.trim();
+
+    function finish(c) {
+      if (btn) { btn.disabled = false; btn.textContent = '🎲 让它自己取'; }
+      form.elements.name.value = c.name;
+      if (c.persona) form.elements.persona.value = c.persona;
+      applyEmoji(form, c.emoji);
+      form.elements.name.focus();
+      form.elements.name.select();
+      toast('它给自己取名叫「' + c.name + '」');
+    }
+
+    function fallback(msg) {
+      if (btn) { btn.disabled = false; btn.textContent = '🎲 让它自己取'; }
+      localCompanionIdea(form);
+      toast(msg || '先用本地想的名字');
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = '它正在想…'; }
+
+    if (AI && AI.isReady()) {
+      AI.suggestCompanion({ hint: hint }).then(finish).catch(function (err) {
+        fallback((err && err.message ? err.message + '，' : '') + '先给你起了个本地的名字');
+      });
+    } else {
+      fallback('还没填 API Key，先用本地的名字');
+    }
   }
 
   function openSettingsModal() {
@@ -1270,6 +1373,18 @@
       case 'chat-to-diary': return chatToDiary();
       case 'clear-chat': return clearChat();
       case 'test-ai': return testAi();
+      case 'suggest-name': return suggestName();
+      case 'pick-persona': {
+        var pForm = el.closest('form');
+        var p = PERSONAS[Number(el.getAttribute('data-i'))];
+        if (!pForm || !p) return;
+        pForm.elements.persona.value = p.text;
+        applyEmoji(pForm, p.emoji);
+        $$('.preset-chips .chip', pForm).forEach(function (b) {
+          b.classList.toggle('on', b === el);
+        });
+        return;
+      }
       default: return;
     }
   }
