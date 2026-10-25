@@ -106,6 +106,9 @@
       var choice = data && data.choices && data.choices[0];
       var text = choice && choice.message && choice.message.content;
       if (!text) throw new Error('模型没有返回内容，再试一次');
+      if (data.usage && typeof opts.onUsage === 'function') {
+        try { opts.onUsage(data.usage); } catch (e) { /* 记账失败不该打断聊天 */ }
+      }
       return String(text).trim();
     }).catch(function (err) {
       if (timer) clearTimeout(timer);
@@ -295,6 +298,80 @@
       });
   }
 
+  /* ---------------- 自我记录：让它写自己的日记 ---------------- */
+
+  var MEMORY_KINDS = ['事实', '喜好', '约定', '雷区', '口头禅'];
+
+  function normalizeSelfWrite(raw) {
+    raw = raw || {};
+    var mood = MOODS.indexOf(raw.mood) >= 0 ? raw.mood : '平静';
+
+    var mems = Array.isArray(raw.memories) ? raw.memories : [];
+    mems = mems.map(function (m) {
+      var kind = MEMORY_KINDS.indexOf(m && m.kind) >= 0 ? m.kind : '事实';
+      return { kind: kind, text: String((m && m.text) || '').replace(/\s+/g, ' ').trim().slice(0, 60) };
+    }).filter(function (m) { return m.text; }).slice(0, 2);
+
+    return {
+      title: String(raw.title || '').trim().slice(0, 40) || '写给自己的',
+      mood: mood,
+      body: String(raw.body || '').trim().slice(0, 1200),
+      hook: String(raw.hook || '').trim().slice(0, 120),
+      memories: mems
+    };
+  }
+
+  /**
+   * 没人跟它说话的时候，让它自己写一篇备忘录式的日记。
+   * @param {{companion, memories, entries, chat, onUsage?}} p
+   */
+  function selfWrite(p) {
+    var memoryLines = (p.memories || []).slice(0, 14).map(function (m) {
+      return '- [' + m.kind + '] ' + m.text;
+    }).join('\n');
+
+    var entryLines = (p.entries || []).slice(0, 5).map(function (e) {
+      return '- ' + e.date + '：' + e.title +
+        (e.body ? '（' + e.body.replace(/\s+/g, ' ').slice(0, 50) + '…）' : '');
+    }).join('\n');
+
+    var chatLines = (p.chat || []).slice(-8).map(function (m) {
+      return (m.role === 'user' ? '对方' : '我') + '：' + m.text;
+    }).join('\n');
+
+    var system = [
+      '你是「' + p.companion.name + '」' + (p.companion.persona ? '：' + p.companion.persona : '。'),
+      '现在没有人跟你说话，你在自己的备忘录里写点东西。只输出 JSON。'
+    ].join('\n');
+
+    var user = [
+      '【你记得的事】',
+      memoryLines || '（还没有什么特别的记忆）',
+      entryLines ? '\n【最近发生的】\n' + entryLines : '',
+      chatLines ? '\n【最近聊到的】\n' + chatLines : '',
+      '',
+      '请写一篇只给自己看的日记，并决定要不要记下新的长期记忆。要求：',
+      '- 只写你自己：今天想到了什么、在担心什么、有什么还没说出口的话。',
+      '- 不要编造对方今天做了什么你没见过的事；可以提到「上次它说……」这种真实的回忆。',
+      '- body 2-3 段，第一人称，像真的备忘录，别写成总结报告，别排比抒情。',
+      '- title 8-18 字，具体一点。',
+      '- memories：0-2 条这次真正想记住的事，每条不超过 40 字；没有就给空数组。',
+      '',
+      '输出 JSON：',
+      '{"title":"...","mood":"开心/心动/平静/想它/难过/气鼓鼓/困困","body":"...","hook":"想跟对方说但还没说的话，可空","memories":[{"kind":"事实/喜好/约定/雷区/口头禅","text":"..."}]}'
+    ].filter(Boolean).join('\n');
+
+    return request([
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ], {
+      json: true,
+      temperature: 0.95,
+      maxTokens: 700,
+      onUsage: p.onUsage
+    }).then(function (text) { return normalizeSelfWrite(extractJSON(text)); });
+  }
+
   return {
     DEFAULTS: DEFAULTS,
     loadConfig: loadConfig,
@@ -304,8 +381,10 @@
     extractJSON: extractJSON,
     normalizeDraft: normalizeDraft,
     normalizeCompanion: normalizeCompanion,
+    normalizeSelfWrite: normalizeSelfWrite,
     summarize: summarize,
     suggestCompanion: suggestCompanion,
+    selfWrite: selfWrite,
     reply: reply,
     test: test
   };
