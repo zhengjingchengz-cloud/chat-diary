@@ -342,31 +342,33 @@ test('自我记录的设置能存进备份并清洗坏值', () => {
   assert.equal(bad.selfWrite.peakPause, false, '没写就是默认不暂停');
 });
 
-test('优惠时段：00:30–08:30 不算高峰', () => {
-  const at = (h, m) => new Date(2026, 9, 25, h, m, 0).getTime();
-  assert.equal(C.isOffPeakHour(at(0, 30)), true);
-  assert.equal(C.isOffPeakHour(at(3, 0)), true);
-  assert.equal(C.isOffPeakHour(at(8, 29)), true);
-  assert.equal(C.isOffPeakHour(at(8, 30)), false);
-  assert.equal(C.isOffPeakHour(at(0, 29)), false);
-  assert.equal(C.isPeakHour(at(14, 0)), true);
-  assert.equal(C.nextOffPeakText(at(14, 0)), '明天 00:30');
-  assert.equal(C.nextOffPeakText(at(1, 0)), '现在');
-  assert.equal(C.nextOffPeakText(at(0, 10)), '今天 00:30');
+test('高峰时段：工作日 UTC 01–04、06–10，其余全优惠', () => {
+  const utc = (y, mo, d, h, mi) => Date.UTC(y, mo, d, h, mi);
+  // 2026-10-26 是周一，2026-10-24 是周六
+  assert.equal(C.isPeakHour(utc(2026, 9, 26, 2, 0)), true, '周一 02:00 UTC 是高峰');
+  assert.equal(C.isPeakHour(utc(2026, 9, 26, 5, 0)), false, '05:00 UTC 在两段之间，算优惠');
+  assert.equal(C.isPeakHour(utc(2026, 9, 26, 7, 0)), true, '07:00 UTC 是高峰');
+  assert.equal(C.isPeakHour(utc(2026, 9, 26, 10, 0)), false, '10:00 UTC 高峰结束');
+  assert.equal(C.isPeakHour(utc(2026, 9, 26, 0, 59)), false, '01:00 之前算优惠');
+  assert.equal(C.isPeakHour(utc(2026, 9, 24, 2, 0)), false, '周六全天优惠');
+  assert.equal(C.isPeakHour(utc(2026, 9, 25, 7, 0)), false, '周日全天优惠');
+  assert.equal(C.isOffPeakHour(utc(2026, 9, 26, 2, 0)), false);
+  assert.match(C.peakWindowsText(utc(2026, 9, 26, 2, 0)), /^\d{2}:\d{2}–\d{2}:\d{2}、\d{2}:\d{2}–\d{2}:\d{2}$/);
+  assert.match(C.nextOffPeakText(utc(2026, 9, 26, 2, 0)), /^(今天|明天) \d{2}:\d{2}$/);
+  assert.equal(C.nextOffPeakText(utc(2026, 9, 24, 2, 0)), '现在');
 });
 
-test('高峰期开关：打开后白天不自动写', () => {
+test('高峰期开关：高峰时不自动写，优惠时段照写', () => {
   const s = C.createEmptyState();
-  s.entries = [];
   s.selfWrite = { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '', peakPause: true };
-  const noon = new Date(2026, 9, 25, 14, 0, 0).getTime();
-  const night = new Date(2026, 9, 26, 3, 0, 0).getTime();
+  const peak = Date.UTC(2026, 9, 26, 2, 0);   // 周一 02:00 UTC
+  const off = Date.UTC(2026, 9, 26, 5, 0);    // 周一 05:00 UTC
 
-  assert.equal(C.selfWriteDue(s, noon).reason, 'peak', '下午不写');
-  assert.equal(C.selfWriteDue(s, night).due, true, '凌晨优惠时段可以写');
+  assert.equal(C.selfWriteDue(s, peak).reason, 'peak', '高峰不写');
+  assert.equal(C.selfWriteDue(s, off).due, true, '优惠时段可以写');
 
   s.selfWrite.peakPause = false;
-  assert.equal(C.selfWriteDue(s, noon).due, true, '关掉开关就随时写');
+  assert.equal(C.selfWriteDue(s, peak).due, true, '关掉开关就随时写');
 });
 
 test('记忆相似度：能找出同一件事的两种说法', () => {
