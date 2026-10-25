@@ -927,7 +927,7 @@ input[type="range"]::-moz-range-thumb {
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 .modal {
-  width: min(620px, 100%);
+  width: min(620px, calc(100vw - 40px));
   max-height: min(86vh, 880px);
   display: flex;
   flex-direction: column;
@@ -1027,6 +1027,31 @@ label.f input:focus, label.f select:focus, label.f textarea:focus {
 
 .mood-pill:hover { border-color: #f0c3ae; }
 .mood-pill.on { background: var(--accent-soft); border-color: #f8c4ac; color: #b4502a; font-weight: 500; }
+
+/* 输入框 + 右侧按钮 */
+.input-with-btn { display: flex; gap: 6px; align-items: center; }
+
+.input-with-btn input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  font-size: 13.5px;
+  color: var(--ink);
+  letter-spacing: 0;
+  outline: none;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+
+.input-with-btn input[type="text"]:focus {
+  border-color: #f3b79c;
+  box-shadow: 0 0 0 3.5px rgba(244, 112, 63, .10);
+}
+
+.preset-chips { margin-top: 2px; }
+.preset-chips .chip { font-size: 11.5px; padding: 5px 10px; }
 
 .quote-rows { display: flex; flex-direction: column; gap: 6px; }
 
