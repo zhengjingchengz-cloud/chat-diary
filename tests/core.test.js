@@ -261,3 +261,88 @@ test('对话记录能随备份存下来，坏数据不会炸', () => {
   assert.deepEqual(Object.keys(messy.chats), [messy.companions[0].id]);
   assert.deepEqual(messy.chats[messy.companions[0].id], [], '不认识的伙伴的对话被丢掉');
 });
+
+/* ==================== 自我记录 ==================== */
+
+test('它自己写的日记：作者标记保留，编辑时不会被改成我写的', () => {
+  const s = C.seedState();
+  const e = C.upsertEntry(s, {
+    companionId: 'c-fish',
+    date: C.todayISO(),
+    title: '今天想跟你说的话',
+    author: 'self'
+  });
+  assert.equal(e.author, 'self');
+
+  const edited = C.upsertEntry(s, { ...e, title: '改了个标题' });
+  assert.equal(edited.author, 'self', '编辑不该把作者身份抹掉');
+
+  const mine = C.upsertEntry(s, { companionId: 'c-fish', title: '我写的' });
+  assert.equal(mine.author, 'me');
+});
+
+test('token 用量：当天累加，跨天归零', () => {
+  const s = C.createEmptyState();
+  assert.equal(C.usageToday(s).tokens, 0);
+  C.addUsage(s, 120);
+  C.addUsage(s, 80.6);
+  assert.equal(C.usageToday(s).tokens, 201);
+  assert.equal(s.usage.calls, 2);
+
+  s.usage.date = '2020-01-01';
+  assert.equal(C.usageToday(s).tokens, 0, '换了一天就归零');
+  assert.equal(s.usage.date, C.todayISO());
+});
+
+test('什么时候该让它自己写', () => {
+  const now = Date.now();
+  const s = C.createEmptyState();
+  s.selfWrite = { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '' };
+
+  assert.equal(C.selfWriteDue(s, now).due, true, '没写过就该写');
+
+  s.selfWrite.lastRunAt = new Date(now - 3600000).toISOString();
+  assert.equal(C.selfWriteDue(s, now).reason, 'tooSoon', '一小时前刚写过');
+  assert.ok(C.selfWriteDue(s, now).hoursLeft > 22);
+
+  s.selfWrite.lastRunAt = new Date(now - 25 * 3600000).toISOString();
+  assert.equal(C.selfWriteDue(s, now).due, true, '超过 24 小时了');
+
+  s.uid = null;
+  s.usage = { date: C.todayISO(), tokens: 1500, calls: 3 };
+  const r = C.selfWriteDue(s, now);
+  assert.equal(r.reason, 'budget', '额度用完了');
+  assert.equal(r.cap, 1500);
+
+  s.selfWrite.enabled = false;
+  assert.equal(C.selfWriteDue(s, now).reason, 'off', '关掉就不写');
+});
+
+test('记忆去重：同一件事不会天天记一遍', () => {
+  const s = C.seedState();
+  assert.equal(C.hasMemory(s, 'c-fish', '我不吃香菜，喝奶茶三分糖去冰。'), true);
+  assert.equal(C.hasMemory(s, 'c-fish', '我不吃香菜，喝奶茶三分糖去冰'), true, '标点差异也算同一条');
+  assert.equal(C.hasMemory(s, 'c-fish', '今天第一次觉得月亮像一条鱼'), false);
+  assert.equal(C.hasMemory(s, 'c-fish', '   '), true, '空内容就当已有，别记');
+});
+
+test('自我记录的设置能存进备份并清洗坏值', () => {
+  const s = C.seedState();
+  s.selfWrite = { enabled: false, dailyTokens: 3000, intervalHours: 48, lastRunAt: '2026-10-01T00:00:00.000Z' };
+  const round = C.parseImport(C.exportJSON(s));
+  assert.deepEqual(round.selfWrite, s.selfWrite);
+
+  const bad = C.parseImport(JSON.stringify({
+    companions: [{ name: 'x' }],
+    selfWrite: { enabled: 'yes', dailyTokens: -5, intervalHours: 9999 }
+  }));
+  assert.equal(bad.selfWrite.dailyTokens, 0, '负数额度归零');
+  assert.equal(bad.selfWrite.intervalHours, 720, '间隔封顶');
+  assert.equal(bad.selfWrite.enabled, true);
+});
+
+test('示例数据刚建好时不会立刻自述', () => {
+  const s = C.seedState();
+  assert.equal(C.selfWriteDue(s, Date.now()).due, false);
+  assert.equal(C.selfWriteDue(s, Date.now()).reason, 'tooSoon');
+});
