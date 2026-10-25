@@ -225,6 +225,18 @@
       q('[data-action="settings"]').click();
       await wait(60);
       ok('打开设置', !!q('form[data-form="settings"]'));
+
+      var sform = q('form[data-form="settings"]');
+      sform.elements.selfBudget.value = '800';
+      sform.elements.selfPeakPause.checked = true;
+      sform.querySelector('button[type="submit"]').click();
+      await wait(100);
+      var st5 = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      ok('额度可以自己填（800）', st5.selfWrite.dailyTokens === 800);
+      ok('高峰期开关存下来了', st5.selfWrite.peakPause === true);
+
+      q('[data-action="settings"]').click();
+      await wait(60);
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       await wait(40);
       ok('Esc 能关掉弹窗', !q('.modal-backdrop'));
@@ -320,6 +332,39 @@
       over.selfWrite.dailyTokens = 10;
       over.usage = { date: window.DiaryCore.todayISO(), tokens: 999, calls: 1 };
       ok('额度用完时不会写', window.DiaryCore.selfWriteDue(over, Date.now()).reason === 'budget');
+
+      /* ==================== 记忆冲突 + 主动开口 ==================== */
+
+      q('[data-action="view"][data-view="memories"]').click();
+      await wait(80);
+      var mf2 = q('form[data-form="memory"]');
+      mf2.elements.text.value = '我不吃香菜，奶茶三分糖去冰，别加珍珠';
+      mf2.querySelector('button[type="submit"]').click();
+      await wait(120);
+      ok('像旧记忆时会先问你', !!q('form[data-form="mem-conflict"]'));
+
+      q('form[data-form="mem-conflict"] button[type="submit"]').click();
+      await wait(150);
+      var st6 = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      ok('替换成新的说法',
+        st6.memories.some(function (m) { return m.text.indexOf('别加珍珠') > -1; }));
+      ok('被替换的旧说法没了',
+        !st6.memories.some(function (m) { return m.text === '我不吃香菜，喝奶茶三分糖去冰。'; }));
+
+      // 主动开口
+      q('[data-action="view"][data-view="chat"]').click();
+      await wait(80);
+      q('[data-action="clear-chat"]').click();
+      await wait(120);
+      ok('清空后是空的对话', !!q('.chat-empty'));
+
+      q('[data-action="proactive"]').click();
+      await wait(350);
+      ok('它主动开了一次口', qa('.bubble.ai').length === 1);
+      var st7 = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      ok('主动消息打了 proactive 标记',
+        st7.chats['c-fish'].some(function (m) { return m.proactive === true; }));
+      ok('记下了主动开口的时间', !!st7.proactive.lastAt);
 
       // 没 Key 时应该显示引导卡片
       localStorage.removeItem('chatdiary.ai.v1');
