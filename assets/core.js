@@ -997,28 +997,55 @@
     return { due: true, reason: 'ok', used: used, cap: cap };
   }
 
-  /** DeepSeek 的优惠时段：北京时间 00:30–08:30 */
-  function isOffPeakHour(nowMs) {
-    var d = new Date(nowMs == null ? Date.now() : nowMs);
-    var m = d.getHours() * 60 + d.getMinutes();
-    return m >= 30 && m < 510;
-  }
+  /**
+   * DeepSeek 官方定价规则（2026 版）：
+   *   高峰 = UTC 01:00–04:00 与 06:00–10:00，周一至周五（中国法定节假日除外）
+   *   其余时间（含周末）全部按优惠价
+   * 用 UTC 判断，所以在任何时区都算得对。
+   */
+  var PEAK_UTC_WINDOWS = [[60, 240], [360, 600]];
 
   function isPeakHour(nowMs) {
-    return !isOffPeakHour(nowMs);
+    var d = new Date(nowMs == null ? Date.now() : nowMs);
+    var day = d.getUTCDay();
+    if (day === 0 || day === 6) return false;
+    var m = d.getUTCHours() * 60 + d.getUTCMinutes();
+    for (var i = 0; i < PEAK_UTC_WINDOWS.length; i++) {
+      if (m >= PEAK_UTC_WINDOWS[i][0] && m < PEAK_UTC_WINDOWS[i][1]) return true;
+    }
+    return false;
   }
 
-  /** 下一个优惠时段开始的本地时间文字，例如 "明天 00:30" */
+  function isOffPeakHour(nowMs) {
+    return !isPeakHour(nowMs);
+  }
+
+  function localHHMM(d) {
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  /** 高峰窗口换算成本地时间，例如 "09:00–12:00、14:00–18:00" */
+  function peakWindowsText(nowMs) {
+    var base = new Date(nowMs == null ? Date.now() : nowMs);
+    return PEAK_UTC_WINDOWS.map(function (w) {
+      var a = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), 0, w[0]));
+      var b = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), 0, w[1]));
+      return localHHMM(a) + '–' + localHHMM(b);
+    }).join('、');
+  }
+
+  /** 下一次进入优惠时段的本地时间文字，例如 "今天 18:00" */
   function nextOffPeakText(nowMs) {
-    var now = new Date(nowMs == null ? Date.now() : nowMs);
-    var start = new Date(now.getTime());
-    start.setHours(0, 30, 0, 0);
-    if (start.getTime() <= now.getTime()) {
-      if (isOffPeakHour(now.getTime())) return '现在';
-      start = new Date(start.getTime() + 86400000);
-    }
-    var isTomorrow = start.getDate() !== now.getDate();
-    return (isTomorrow ? '明天 ' : '今天 ') + '00:30';
+    var nowMs2 = nowMs == null ? Date.now() : nowMs;
+    if (!isPeakHour(nowMs2)) return '现在';
+
+    var d = new Date(nowMs2);
+    var m = d.getUTCHours() * 60 + d.getUTCMinutes();
+    var endMin = m < 240 ? 240 : 600;
+    var end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, endMin));
+
+    var sameDay = end.getDate() === d.getDate() && end.getMonth() === d.getMonth();
+    return (sameDay ? '今天 ' : '明天 ') + localHHMM(end);
   }
 
   /* ---------- 记忆冲突 ---------- */
@@ -1152,6 +1179,7 @@
     selfWriteDue: selfWriteDue,
     isOffPeakHour: isOffPeakHour,
     isPeakHour: isPeakHour,
+    peakWindowsText: peakWindowsText,
     nextOffPeakText: nextOffPeakText,
     hasMemory: hasMemory,
     markSelfWrite: markSelfWrite,
