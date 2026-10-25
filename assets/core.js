@@ -111,6 +111,8 @@
       entries: [],
       memories: [],
       chats: {},
+      selfWrite: { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '' },
+      usage: { date: '', tokens: 0, calls: 0 },
       activeCompanionId: null
     };
   }
@@ -152,6 +154,7 @@
       body: str(input.body, ''),
       quotes: quotes,
       hook: clampText(input.hook, 120) || '',
+      author: input.author === 'self' ? 'self' : 'me',
       createdAt: str(input.createdAt, '') || new Date().toISOString(),
       updatedAt: str(input.updatedAt, '') || new Date().toISOString()
     };
@@ -231,6 +234,23 @@
         .slice(-60);
     });
 
+    var sw = raw.selfWrite && typeof raw.selfWrite === 'object' ? raw.selfWrite : {};
+    var budget = Number(sw.dailyTokens);
+    var interval = Number(sw.intervalHours);
+    state.selfWrite = {
+      enabled: sw.enabled !== false,
+      dailyTokens: isFinite(budget) ? Math.max(0, Math.min(Math.round(budget), 200000)) : 1500,
+      intervalHours: isFinite(interval) && interval >= 1 ? Math.min(Math.round(interval), 720) : 24,
+      lastRunAt: str(sw.lastRunAt, '')
+    };
+
+    var u = raw.usage && typeof raw.usage === 'object' ? raw.usage : {};
+    state.usage = {
+      date: str(u.date, ''),
+      tokens: Math.max(0, Math.round(Number(u.tokens) || 0)),
+      calls: Math.max(0, Math.round(Number(u.calls) || 0))
+    };
+
     return state;
   }
 
@@ -258,6 +278,7 @@
     if (idx >= 0) {
       entry.createdAt = state.entries[idx].createdAt;
       entry.updatedAt = new Date().toISOString();
+      if (!input.author) entry.author = state.entries[idx].author || 'me';
       state.entries[idx] = entry;
     } else {
       entry.createdAt = new Date().toISOString();
@@ -548,6 +569,9 @@
     state.chats = {};
     state.chats[fish.id] = [];
     state.chats[moon.id] = [];
+    // 示例刚建好时不立刻自述，等一个周期（或用户手动点「让它写一篇」）
+    state.selfWrite.lastRunAt = new Date().toISOString();
+    state.usage = { date: todayISO(), tokens: 0, calls: 0 };
 
     state.entries = [
       makeEntry({
@@ -909,6 +933,69 @@
     }).join('\n');
   }
 
+  /* ============================================================
+     自我记录：每天给伙伴一点 token，让它写自己的日记
+     ============================================================ */
+
+  /** 今天的用量；跨天自动归零 */
+  function usageToday(state) {
+    var today = todayISO();
+    if (!state.usage || state.usage.date !== today) {
+      state.usage = { date: today, tokens: 0, calls: 0 };
+    }
+    return state.usage;
+  }
+
+  function addUsage(state, tokens) {
+    var u = usageToday(state);
+    u.tokens = Math.max(0, u.tokens + (Math.round(Number(tokens)) || 0));
+    u.calls += 1;
+    return u;
+  }
+
+  /**
+   * 现在该不该让它自己写一篇？
+   * @returns {{due:boolean, reason:string, used?:number, cap?:number, hoursLeft?:number}}
+   */
+  function selfWriteDue(state, nowMs) {
+    var sw = state.selfWrite || {};
+    if (!sw.enabled) return { due: false, reason: 'off' };
+
+    var cap = Math.max(0, Number(sw.dailyTokens) || 0);
+    var used = usageToday(state).tokens;
+    if (cap <= 0) return { due: false, reason: 'off' };
+    if (used >= cap) return { due: false, reason: 'budget', used: used, cap: cap };
+
+    var interval = Math.max(1, Number(sw.intervalHours) || 24);
+    if (sw.lastRunAt) {
+      var last = Date.parse(sw.lastRunAt);
+      if (!isNaN(last)) {
+        var hours = ((nowMs == null ? Date.now() : nowMs) - last) / 3600000;
+        if (hours < interval) {
+          return { due: false, reason: 'tooSoon', hoursLeft: Math.max(0, interval - hours), used: used, cap: cap };
+        }
+      }
+    }
+    return { due: true, reason: 'ok', used: used, cap: cap };
+  }
+
+  /** 这条记忆是不是已经有了（去重，避免天天记同一件事） */
+  function hasMemory(state, companionId, text) {
+    var key = String(text || '').replace(/[\s，。、,.！!？?「」"':：;；]/g, '');
+    if (!key) return true;
+    return memoriesFor(state, companionId).some(function (m) {
+      var k = String(m.text || '').replace(/[\s，。、,.！!？?「」"':：;；]/g, '');
+      if (!k) return false;
+      return k === key || (k.length > 8 && key.length > 8 && (k.indexOf(key.slice(0, 8)) === 0 || key.indexOf(k.slice(0, 8)) === 0));
+    });
+  }
+
+  function markSelfWrite(state, when) {
+    if (!state.selfWrite) state.selfWrite = { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '' };
+    state.selfWrite.lastRunAt = when || new Date().toISOString();
+    return state.selfWrite.lastRunAt;
+  }
+
   return {
     VERSION: VERSION,
     MOODS: MOODS,
@@ -964,6 +1051,12 @@
     appendChat: appendChat,
     clearChat: clearChat,
     chatToLog: chatToLog,
+    // 自我记录
+    usageToday: usageToday,
+    addUsage: addUsage,
+    selfWriteDue: selfWriteDue,
+    hasMemory: hasMemory,
+    markSelfWrite: markSelfWrite,
     // 导入导出
     exportJSON: exportJSON,
     parseImport: parseImport,
