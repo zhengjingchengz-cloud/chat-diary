@@ -328,7 +328,7 @@ test('记忆去重：同一件事不会天天记一遍', () => {
 
 test('自我记录的设置能存进备份并清洗坏值', () => {
   const s = C.seedState();
-  s.selfWrite = { enabled: false, dailyTokens: 3000, intervalHours: 48, lastRunAt: '2026-10-01T00:00:00.000Z' };
+  s.selfWrite = { enabled: false, dailyTokens: 3000, intervalHours: 48, lastRunAt: '2026-10-01T00:00:00.000Z', peakPause: true };
   const round = C.parseImport(C.exportJSON(s));
   assert.deepEqual(round.selfWrite, s.selfWrite);
 
@@ -339,6 +339,56 @@ test('自我记录的设置能存进备份并清洗坏值', () => {
   assert.equal(bad.selfWrite.dailyTokens, 0, '负数额度归零');
   assert.equal(bad.selfWrite.intervalHours, 720, '间隔封顶');
   assert.equal(bad.selfWrite.enabled, true);
+  assert.equal(bad.selfWrite.peakPause, false, '没写就是默认不暂停');
+});
+
+test('优惠时段：00:30–08:30 不算高峰', () => {
+  const at = (h, m) => new Date(2026, 9, 25, h, m, 0).getTime();
+  assert.equal(C.isOffPeakHour(at(0, 30)), true);
+  assert.equal(C.isOffPeakHour(at(3, 0)), true);
+  assert.equal(C.isOffPeakHour(at(8, 29)), true);
+  assert.equal(C.isOffPeakHour(at(8, 30)), false);
+  assert.equal(C.isOffPeakHour(at(0, 29)), false);
+  assert.equal(C.isPeakHour(at(14, 0)), true);
+  assert.equal(C.nextOffPeakText(at(14, 0)), '明天 00:30');
+  assert.equal(C.nextOffPeakText(at(1, 0)), '现在');
+  assert.equal(C.nextOffPeakText(at(0, 10)), '今天 00:30');
+});
+
+test('高峰期开关：打开后白天不自动写', () => {
+  const s = C.createEmptyState();
+  s.entries = [];
+  s.selfWrite = { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '', peakPause: true };
+  const noon = new Date(2026, 9, 25, 14, 0, 0).getTime();
+  const night = new Date(2026, 9, 26, 3, 0, 0).getTime();
+
+  assert.equal(C.selfWriteDue(s, noon).reason, 'peak', '下午不写');
+  assert.equal(C.selfWriteDue(s, night).due, true, '凌晨优惠时段可以写');
+
+  s.selfWrite.peakPause = false;
+  assert.equal(C.selfWriteDue(s, noon).due, true, '关掉开关就随时写');
+});
+
+test('记忆相似度：能找出同一件事的两种说法', () => {
+  assert.ok(C.memorySimilarity('我不吃香菜，奶茶三分糖', '我不吃香菜，奶茶要三分糖去冰') > 0.6);
+  assert.ok(C.memorySimilarity('喜欢被叫鱼鱼', '今天天气很好') < 0.2);
+
+  const s = C.seedState();
+  const conflicts = C.findMemoryConflicts(s, 'c-fish', '我不吃香菜，奶茶三分糖去冰，别加珍珠');
+  assert.ok(conflicts.length >= 1);
+  assert.match(conflicts[0].memory.text, /香菜/);
+  assert.ok(conflicts[0].score >= 0.5 && conflicts[0].score < 1);
+
+  assert.deepEqual(C.findMemoryConflicts(s, 'c-fish', '今天第一次觉得月亮像一条鱼'), []);
+});
+
+test('记忆去重扫描：找得出成对的重复', () => {
+  const s = C.seedState();
+  const before = C.scanMemoryDuplicates(s, 'c-fish').length;
+  C.addMemory(s, { companionId: 'c-fish', kind: '事实', text: '我不吃香菜，喝奶茶三分糖去冰。' });
+  const after = C.scanMemoryDuplicates(s, 'c-fish');
+  assert.ok(after.length > before, '加入一条几乎一样的记忆后能扫出来');
+  assert.ok(after[0].score > 0.9);
 });
 
 test('示例数据刚建好时不会立刻自述', () => {
