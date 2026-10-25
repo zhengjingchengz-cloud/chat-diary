@@ -67,3 +67,16 @@ test('没有 Key 时 isReady 为 false（Node 里没有 localStorage 也不炸�
   assert.equal(AI.loadConfig().baseUrl, 'https://api.deepseek.com');
   assert.equal(AI.loadConfig().model, 'deepseek-chat');
 });
+
+test('角色取名结果会被清洗：去空格引号、限长、emoji 兜底', () => {
+  const c = AI.normalizeCompanion({ name: ' 「糯米」 ', emoji: '', persona: '  说话   很慢  ' });
+  assert.equal(c.name, '糯米');
+  assert.equal(c.emoji, '🐟');
+  assert.equal(c.persona, '说话 很慢');
+
+  const long = AI.normalizeCompanion({ name: '名'.repeat(30), persona: 'p'.repeat(200) });
+  assert.equal(long.name.length, 12);
+  assert.equal(long.persona.length, 80);
+
+  assert.deepEqual(AI.normalizeCompanion(null), { name: '', emoji: '🐟', persona: '' });
+});
