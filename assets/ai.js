@@ -253,6 +253,48 @@
       .then(function (text) { return { ok: true, sample: text }; });
   }
 
+  /* ---------------- 让它自己取名 ---------------- */
+
+  function normalizeCompanion(raw) {
+    raw = raw || {};
+    var name = String(raw.name || '').replace(/[\s"「」『』]/g, '').slice(0, 12);
+    var emoji = String(raw.emoji || '').trim().slice(0, 4) || '🐟';
+    var persona = String(raw.persona || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return { name: name, emoji: emoji, persona: persona };
+  }
+
+  /**
+   * 让模型自己给自己起名 + 写设定。
+   * @param {{hint?:string}} opts hint 是用户的期待，可以留空
+   */
+  function suggestCompanion(opts) {
+    opts = opts || {};
+    var hint = String(opts.hint || '').trim().slice(0, 60);
+
+    var system = '你在帮人设计一个会住进手机里的中文陪伴角色。角色要有辨识度，不要像客服。只输出 JSON，不要解释。';
+
+    var user = [
+      hint ? '对方想要的感觉：' + hint : '对方没有特别要求，你自己想一个有辨识度的角色。',
+      '',
+      '请你为这个角色取名，并写一句设定。要求：',
+      '- name：2-4 个汉字，像真人昵称，好叫、有记忆点、不撞名；不要"小助手""AI""机器人""精灵"这类词',
+      '- emoji：一个最贴角色的表情',
+      '- persona：25-50 字，用第一人称写清它的性格、说话习惯、和对方的关系；要具体到能听出声音，不要空泛形容词',
+      '',
+      '输出 JSON：{"name":"...","emoji":"...","persona":"..."}'
+    ].join('\n');
+
+    return request([
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ], { json: true, temperature: 1.1, maxTokens: 220 })
+      .then(function (text) { return normalizeCompanion(extractJSON(text)); })
+      .then(function (c) {
+        if (!c.name) throw new Error('模型没给出名字，再点一次试试');
+        return c;
+      });
+  }
+
   return {
     DEFAULTS: DEFAULTS,
     loadConfig: loadConfig,
@@ -261,7 +303,9 @@
     request: request,
     extractJSON: extractJSON,
     normalizeDraft: normalizeDraft,
+    normalizeCompanion: normalizeCompanion,
     summarize: summarize,
+    suggestCompanion: suggestCompanion,
     reply: reply,
     test: test
   };
