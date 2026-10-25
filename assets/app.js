@@ -45,7 +45,8 @@
     expanded: {},
     pack: { companionId: null, maxEntries: 7, quotes: true },
     chat: { pending: false, error: '' },
-    imp: null
+    imp: null,
+    selfBusy: false
   };
 
   var els = {};
@@ -328,13 +329,16 @@
       '<div class="search"><span class="ico">🔍</span>' +
         '<input id="search-input" type="search" autocomplete="off" placeholder="搜日记、原话、标签…" value="' + esc(ui.q) + '">' +
       '</div>' +
-      '<button class="btn line sm" data-action="import-chat">⚡ 从聊天记录生成</button>' +
       '<select class="mood-select" id="mood-filter">' +
         '<option value="">全部心情</option>' + moods +
       '</select>' +
       '<div class="chips" id="tag-chips">' + tagChipsHtml() + '</div>' +
       '<span class="spacer"></span>' +
       '<span class="result-hint" id="result-hint">' + hintText() + '</span>' +
+      '<div class="toolbar-actions">' +
+        '<button class="btn line sm" data-action="import-chat">⚡ 从聊天记录生成</button>' +
+        '<button class="btn line sm" data-action="self-write">✎ 让它写一篇</button>' +
+      '</div>' +
       '</div>';
   }
 
@@ -411,6 +415,7 @@
         '<div class="entry-head">' +
           '<h3 data-action="toggle-entry" data-id="' + esc(e.id) + '" style="cursor:pointer">' + esc(e.title) + '</h3>' +
           '<div class="entry-meta">' +
+            (e.author === 'self' ? '<span class="mood mood-self">✎ 它写的</span>' : '') +
             '<span class="mood">' + moodEmoji(e.mood) + ' ' + esc(e.mood) + '</span>' +
             e.tags.map(function (t) {
               return '<button class="tag" data-action="filter-tag" data-tag="' + esc(t) + '">#' + esc(t) + '</button>';
@@ -1047,6 +1052,20 @@
     var cfg = AI ? AI.loadConfig() : { key: '', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com' };
     var hasKey = !!(cfg.key);
 
+    var sw = state.selfWrite;
+    var used = C.usageToday(state).tokens;
+    var budgetOptions = [500, 1000, 1500, 3000, 5000].map(function (b) {
+      return '<option value="' + b + '"' + (sw.dailyTokens === b ? ' selected' : '') + '>' + b + ' tokens</option>';
+    }).join('');
+    var intervalOptions = [12, 24, 48, 72].map(function (h) {
+      return '<option value="' + h + '"' + (sw.intervalHours === h ? ' selected' : '') + '>' + h + ' 小时</option>';
+    }).join('');
+    var lastRun = sw.lastRunAt ? new Date(sw.lastRunAt) : null;
+    var lastRunText = lastRun && !isNaN(lastRun.getTime())
+      ? C.formatDateCN(C.toISODate(lastRun)) + ' ' +
+        ('0' + lastRun.getHours()).slice(-2) + ':' + ('0' + lastRun.getMinutes()).slice(-2)
+      : '还没写过';
+
     openModal(
       '<form class="modal" data-form="settings">' +
         '<div class="modal-head">' +
@@ -1073,6 +1092,22 @@
             '<div class="pack-actions">' +
               '<button type="button" class="btn line sm" data-action="test-ai">测试连接</button>' +
               '<span class="f-note">Key 只存在这台设备，不会进导出备份</span>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="ai-box">' +
+            '<div class="ai-head"><b>它自己写日记</b>' +
+              '<span class="ai-state' + (sw.enabled ? ' on' : '') + '">' + (sw.enabled ? '已开启' : '已关闭') + '</span>' +
+            '</div>' +
+            '<label class="switch"><input type="checkbox" name="selfEnabled"' + (sw.enabled ? ' checked' : '') + '> 打开应用时，让它补写当天的那一篇</label>' +
+            '<div class="row">' +
+              '<label class="f"><span>每天最多用</span><select name="selfBudget">' + budgetOptions + '</select></label>' +
+              '<label class="f"><span>隔多久写一次</span><select name="selfInterval">' + intervalOptions + '</select></label>' +
+            '</div>' +
+            '<div class="pack-facts">今天自述已用 <b>' + used + '</b> / <b>' + sw.dailyTokens + '</b> tokens · 上次写于 <b>' + lastRunText + '</b></div>' +
+            '<div class="pack-actions">' +
+              '<button type="button" class="btn line sm" data-action="self-write">现在写一篇</button>' +
+              '<span class="f-note">网页关掉后它不会自己跑；额度用完当天就停。</span>' +
             '</div>' +
           '</div>' +
 
@@ -1186,6 +1221,73 @@
     persist();
     render();
     toast('对话清空了');
+  }
+
+  /* ---------------------------- 自我记录 ---------------------------- */
+
+  function runSelfWrite(manual) {
+    if (ui.selfBusy) return;
+    var comp = chatCompanion();
+    if (!comp) { toast('先建一个伙伴'); return; }
+    if (!(AI && AI.isReady())) { openSettingsModal(); toast('先填一个 API Key'); return; }
+
+    var due = C.selfWriteDue(state, Date.now());
+    if (!manual && !due.due) return;
+    if (due.reason === 'budget') {
+      toast('今天的额度用完了（' + due.used + ' / ' + due.cap + ' tokens）');
+      return;
+    }
+
+    var material = C.entriesFor(state, comp.id).length + C.memoriesFor(state, comp.id).length;
+    if (!material) { toast('还没什么可回忆的，先写一篇或聊两句'); return; }
+
+    ui.selfBusy = true;
+    toast('「' + comp.name + '」在写自己的日记…');
+
+    AI.selfWrite({
+      companion: comp,
+      memories: C.memoriesFor(state, comp.id),
+      entries: C.entriesFor(state, comp.id).slice(0, 5),
+      chat: C.getChat(state, comp.id),
+      onUsage: function (u) { C.addUsage(state, u.total_tokens || 0); }
+    }).then(function (res) {
+      ui.selfBusy = false;
+      var entry = C.upsertEntry(state, {
+        companionId: comp.id,
+        date: C.todayISO(),
+        title: res.title,
+        mood: res.mood,
+        tags: ['自述'],
+        body: res.body,
+        quotes: [],
+        hook: res.hook,
+        author: 'self'
+      });
+      var added = 0;
+      res.memories.forEach(function (m) {
+        if (C.hasMemory(state, comp.id, m.text)) return;
+        C.addMemory(state, { companionId: comp.id, kind: m.kind, text: m.text });
+        added += 1;
+      });
+      C.markSelfWrite(state);
+      persist();
+      render();
+      toast('它写了《' + entry.title + '》' + (added ? '，还记下 ' + added + ' 条新记忆' : ''));
+    }).catch(function (err) {
+      ui.selfBusy = false;
+      toast(err.message || '它没写出来，再试一次');
+    });
+  }
+
+  /** 打开应用时补写；网页关着的时候它不会跑 */
+  function autoSelfWriteTick() {
+    if (ui.selfBusy) return;
+    if (!(AI && AI.isReady())) return;
+    var comp = chatCompanion();
+    if (!comp) return;
+    if (!C.entriesFor(state, comp.id).length && !C.memoriesFor(state, comp.id).length) return;
+    if (!C.selfWriteDue(state, Date.now()).due) return;
+    runSelfWrite(false);
   }
 
   function testAi() {
@@ -1374,6 +1476,7 @@
       case 'clear-chat': return clearChat();
       case 'test-ai': return testAi();
       case 'suggest-name': return suggestName();
+      case 'self-write': return runSelfWrite(true);
       case 'pick-persona': {
         var pForm = el.closest('form');
         var p = PERSONAS[Number(el.getAttribute('data-i'))];
@@ -1431,6 +1534,11 @@
     if (form.dataset.form === 'settings') {
       var sf = form.elements;
       state.ownerName = sf.ownerName.value.trim();
+      if (sf.selfEnabled) {
+        state.selfWrite.enabled = !!sf.selfEnabled.checked;
+        state.selfWrite.dailyTokens = Math.max(0, Number(sf.selfBudget.value) || 0);
+        state.selfWrite.intervalHours = Math.max(1, Number(sf.selfInterval.value) || 24);
+      }
       try {
         AI.saveConfig({
           key: sf.apiKey.value,
@@ -1514,6 +1622,10 @@
 
     bind();
     render();
+
+    // 打开应用时补写它自己的那篇（关掉网页就不会跑）
+    setTimeout(autoSelfWriteTick, 2500);
+    setInterval(autoSelfWriteTick, 15 * 60 * 1000);
   }
 
   if (document.readyState === 'loading') {
