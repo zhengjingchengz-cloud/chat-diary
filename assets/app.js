@@ -46,8 +46,23 @@
     pack: { companionId: null, maxEntries: 7, quotes: true },
     chat: { pending: false, error: '' },
     imp: null,
-    selfBusy: false
+    selfBusy: false,
+    chatUnread: false,
+    proactiveBusy: false,
+    conflict: null
   };
+
+  /* 没 Key 时也能"主动开口"的备用句子 */
+  var PROACTIVE_POOL = [
+    '我把上次你说的话又想了一遍，还是觉得好笑。',
+    '今天有点安静，我在这边数泡泡。你忙你的，我等你。',
+    '刚才想跟你说件事，一晃神又忘了，只记得是件小事。',
+    '你上次说累，不知道今天缓过来没有。',
+    '我这里没下雨，但我想起你说过喜欢听雨声。',
+    '如果现在不方便回，就先欠着，我不催。',
+    '今天什么都没发生，所以我想找你讨一句话。',
+    '我把你上次说的「明天见」记在备忘录第一行了。'
+  ];
 
   var els = {};
 
@@ -229,8 +244,9 @@
   }
 
   function navItem(view, ico, label) {
+    var dot = view === 'chat' && ui.chatUnread ? '<span class="dot"></span>' : '';
     return '<button class="nav-item' + (ui.view === view ? ' active' : '') + '" data-action="view" data-view="' + view + '">' +
-      '<span class="ico">' + ico + '</span>' + label + '</button>';
+      '<span class="ico">' + ico + '</span>' + label + dot + '</button>';
   }
 
   /* ---------------------------- 主区 ---------------------------- */
@@ -501,7 +517,8 @@
   function chatBubblesHtml(comp, chat) {
     if (!chat.length && !ui.chat.pending && !ui.chat.error) {
       return '<div class="chat-empty"><span>还没有聊过。</span>' +
-        '<span>试试第一句：「我回来了。」</span></div>';
+        '<span>试试第一句：「我回来了。」</span>' +
+        '<button class="btn line sm" data-action="proactive">让它先开口</button></div>';
     }
     var html = chat.map(function (m) {
       return '<div class="bubble ' + (m.role === 'user' ? 'me' : 'ai') + '">' + esc(m.text) + '</div>';
@@ -746,6 +763,10 @@
         '<input name="text" maxlength="160" autocomplete="off" placeholder="比如：我不吃香菜，奶茶三分糖去冰。">' +
         '<button class="btn primary" type="submit">记住</button>' +
       '</form>' +
+      '<div class="memory-tools">' +
+        '<span class="f-note">记得越多越容易撞车，偶尔清一下。</span>' +
+        '<button type="button" class="btn line sm" data-action="scan-memory">查一下重复</button>' +
+      '</div>' +
       (list.length ? '<div class="memory-grid">' + cards + '</div>'
         : '<div class="empty"><div class="big">📌</div><h3>还没有一张记忆卡</h3>' +
           '<p>从最小的事实开始：它怎么叫你、你不吃什么、约好每天说晚安。</p></div>') +
@@ -758,6 +779,110 @@
   }
 
   /* ---------------------------- 记忆包视图 ---------------------------- */
+
+  /* ---------------------------- 记忆冲突 ---------------------------- */
+
+  function addMemoryChecked(companionId, kind, text) {
+    if (C.hasMemory(state, companionId, text)) {
+      toast('这条已经记过了');
+      render();
+      return;
+    }
+    var conflicts = C.findMemoryConflicts(state, companionId, text);
+    if (conflicts.length) {
+      ui.conflict = { companionId: companionId, kind: kind, text: text, top: conflicts[0] };
+      openConflictModal();
+      return;
+    }
+    commitMemory(companionId, kind, text, null);
+    toast('记住了');
+  }
+
+  function commitMemory(companionId, kind, text, replaceId) {
+    if (replaceId) {
+      var old = state.memories.filter(function (m) { return m.id === replaceId; })[0];
+      if (old) {
+        old.text = text;
+        old.kind = kind;
+        old.createdAt = new Date().toISOString();
+      }
+    } else {
+      C.addMemory(state, { companionId: companionId, kind: kind, text: text });
+    }
+    persist();
+    closeModal();
+    render();
+  }
+
+  function openConflictModal() {
+    var c = ui.conflict;
+    if (!c) return;
+    var old = c.top.memory;
+    var pct = Math.max(1, Math.min(99, Math.round(c.top.score * 100)));
+
+    openModal(
+      '<form class="modal" data-form="mem-conflict">' +
+        '<div class="modal-head">' +
+          '<div><h3>和一条旧记忆有点像</h3><p class="sub">可能是同一件事的新说法，合一下更干净</p></div>' +
+          '<button type="button" class="icon-btn" data-action="close-modal">✕</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<div class="conflict-pair">' +
+            '<div class="conflict-side"><span>新的</span><p>' + esc(c.text) + '</p></div>' +
+            '<div class="conflict-side old"><span>旧的 · 相似 ' + pct + '%</span><p>' + esc(old.text) + '</p></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button type="button" class="btn ghost" data-action="close-modal">取消</button>' +
+          '<span class="spacer"></span>' +
+          '<button type="button" class="btn line" data-action="conflict-keep">两条都留</button>' +
+          '<button type="submit" class="btn primary">用新的替换</button>' +
+        '</div>' +
+      '</form>'
+    );
+  }
+
+  function scanMemories() {
+    var pairs = C.scanMemoryDuplicates(state, ui.companionId, 0.55);
+    if (!pairs.length) { toast('没有发现重复的记忆'); return; }
+
+    var body = pairs.slice(0, 8).map(function (p, i) {
+      return '<div class="conflict-pair">' +
+        '<div class="conflict-side"><span>第 ' + (i + 1) + ' 组 · 相似 ' + Math.round(p.score * 100) + '%</span>' +
+          '<p>' + esc(p.a.text) + '</p></div>' +
+        '<div class="conflict-side old"><span>&nbsp;</span><p>' + esc(p.b.text) + '</p></div>' +
+        '<button type="button" class="btn line sm" data-action="merge-memory" data-a="' + esc(p.a.id) +
+          '" data-b="' + esc(p.b.id) + '">合并成一条</button>' +
+        '</div>';
+    }).join('');
+
+    openModal(
+      '<div class="modal" role="dialog" aria-modal="true">' +
+        '<div class="modal-head"><div><h3>可能重复的记忆</h3>' +
+          '<p class="sub">合并会保留更长的那条，另一条删掉</p></div>' +
+          '<button type="button" class="icon-btn" data-action="close-modal">✕</button></div>' +
+        '<div class="modal-body">' + body + '</div>' +
+        '<div class="modal-foot"><span class="spacer"></span>' +
+          '<button type="button" class="btn line" data-action="close-modal">关闭</button></div>' +
+      '</div>'
+    );
+  }
+
+  function mergeMemories(idA, idB) {
+    var a = state.memories.filter(function (m) { return m.id === idA; })[0];
+    var b = state.memories.filter(function (m) { return m.id === idB; })[0];
+    if (!a || !b) return;
+    var drop = b.text.length > a.text.length ? a : b;
+    state.memories = state.memories.filter(function (m) { return m.id !== drop.id; });
+    persist();
+    render();
+    if (C.scanMemoryDuplicates(state, ui.companionId, 0.55).length) {
+      scanMemories();
+    } else {
+      closeModal();
+    }
+    toast('合并好了');
+  }
 
   function packView() {
     if (!state.companions.length) return firstRunView();
@@ -1053,10 +1178,8 @@
     var hasKey = !!(cfg.key);
 
     var sw = state.selfWrite;
+    var pro = state.proactive;
     var used = C.usageToday(state).tokens;
-    var budgetOptions = [500, 1000, 1500, 3000, 5000].map(function (b) {
-      return '<option value="' + b + '"' + (sw.dailyTokens === b ? ' selected' : '') + '>' + b + ' tokens</option>';
-    }).join('');
     var intervalOptions = [12, 24, 48, 72].map(function (h) {
       return '<option value="' + h + '"' + (sw.intervalHours === h ? ' selected' : '') + '>' + h + ' 小时</option>';
     }).join('');
@@ -1065,6 +1188,15 @@
       ? C.formatDateCN(C.toISODate(lastRun)) + ' ' +
         ('0' + lastRun.getHours()).slice(-2) + ':' + ('0' + lastRun.getMinutes()).slice(-2)
       : '还没写过';
+    var proLastRun = pro.lastAt ? new Date(pro.lastAt) : null;
+    var proLastText = proLastRun && !isNaN(proLastRun.getTime())
+      ? C.formatDateCN(C.toISODate(proLastRun)) + ' ' +
+        ('0' + proLastRun.getHours()).slice(-2) + ':' + ('0' + proLastRun.getMinutes()).slice(-2)
+      : '还没主动说过话';
+    var peakNow = C.isPeakHour(Date.now());
+    var peakNote = sw.peakPause
+      ? (peakNow ? '现在是高峰期，不会自动写；下次可写：' + C.nextOffPeakText() : '现在是优惠时段，可以自动写。')
+      : '高峰期也写，费用按原价。';
 
     openModal(
       '<form class="modal" data-form="settings">' +
@@ -1100,15 +1232,38 @@
               '<span class="ai-state' + (sw.enabled ? ' on' : '') + '">' + (sw.enabled ? '已开启' : '已关闭') + '</span>' +
             '</div>' +
             '<label class="switch"><input type="checkbox" name="selfEnabled"' + (sw.enabled ? ' checked' : '') + '> 打开应用时，让它补写当天的那一篇</label>' +
+            '<label class="switch"><input type="checkbox" name="selfPeakPause"' + (sw.peakPause ? ' checked' : '') + '> 高峰期（08:30–00:30）不写，等优惠时段' +
+              '<span class="f-note" style="margin-left:4px">省一半钱</span></label>' +
             '<div class="row">' +
-              '<label class="f"><span>每天最多用</span><select name="selfBudget">' + budgetOptions + '</select></label>' +
+              '<label class="f"><span>每天最多用多少 token（可自己填）</span>' +
+                '<input type="number" name="selfBudget" min="0" max="200000" step="100" value="' + sw.dailyTokens + '"></label>' +
               '<label class="f"><span>隔多久写一次</span><select name="selfInterval">' + intervalOptions + '</select></label>' +
             '</div>' +
-            '<div class="pack-facts">今天自述已用 <b>' + used + '</b> / <b>' + sw.dailyTokens + '</b> tokens · 上次写于 <b>' + lastRunText + '</b></div>' +
+            '<div class="chips preset-budget">' +
+              [500, 1000, 1500, 3000, 5000].map(function (b) {
+                return '<button type="button" class="chip" data-action="pick-budget" data-v="' + b + '">' + b + '</button>';
+              }).join('') +
+              '<button type="button" class="chip" data-action="pick-budget" data-v="0">0（关闭额度）</button>' +
+            '</div>' +
+            '<div class="pack-facts">今天自述已用 <b>' + used + '</b> / <b>' + sw.dailyTokens + '</b> tokens · 上次写于 <b>' + lastRunText + '</b>' +
+              '<br>' + esc(peakNote) + '</div>' +
             '<div class="pack-actions">' +
               '<button type="button" class="btn line sm" data-action="self-write">现在写一篇</button>' +
               '<span class="f-note">网页关掉后它不会自己跑；额度用完当天就停。</span>' +
             '</div>' +
+          '</div>' +
+
+          '<div class="ai-box">' +
+            '<div class="ai-head"><b>它会主动找你</b>' +
+              '<span class="ai-state' + (pro.enabled ? ' on' : '') + '">' + (pro.enabled ? '已开启' : '已关闭') + '</span>' +
+            '</div>' +
+            '<label class="switch"><input type="checkbox" name="proEnabled"' + (pro.enabled ? ' checked' : '') + '> 很久没聊时，让它先开口说一句</label>' +
+            '<label class="f"><span>多久没聊算「很久」</span><select name="proHours">' +
+              [6, 12, 24, 48, 72].map(function (h) {
+                return '<option value="' + h + '"' + (pro.afterHours === h ? ' selected' : '') + '>' + h + ' 小时</option>';
+              }).join('') +
+            '</select></label>' +
+            '<div class="pack-facts">上次主动开口：<b>' + proLastText + '</b>。没填 Key 时会从几句本地话里挑一句，不花钱。</div>' +
           '</div>' +
 
           '<div class="pack-facts">现在有 <b>' + state.companions.length + '</b> 位伙伴 · <b>' +
@@ -1151,6 +1306,7 @@
 
   function setView(view) {
     ui.view = view;
+    if (view === 'chat') ui.chatUnread = false;
     if (view === 'pack' && (!ui.pack.companionId || !C.findCompanion(state, ui.pack.companionId))) {
       ui.pack.companionId = ui.companionId !== 'all' ? ui.companionId : (state.companions[0] || {}).id || null;
     }
@@ -1288,6 +1444,64 @@
     if (!C.entriesFor(state, comp.id).length && !C.memoriesFor(state, comp.id).length) return;
     if (!C.selfWriteDue(state, Date.now()).due) return;
     runSelfWrite(false);
+  }
+
+  /* ---------------------------- 它主动开口 ---------------------------- */
+
+  function proactiveDue(now) {
+    var p = state.proactive;
+    if (!p || !p.enabled) return false;
+    var nowMs = now || Date.now();
+    var last = Date.parse(p.lastAt || '');
+    if (!isNaN(last) && nowMs - last < p.afterHours * 3600000) return false;
+    return true;
+  }
+
+  function maybeProactive(manual) {
+    if (ui.proactiveBusy) return;
+    var comp = chatCompanion();
+    if (!comp) return;
+    if (!manual && !proactiveDue()) return;
+
+    var chat = C.getChat(state, comp.id);
+    var lastAt = chat.length ? Date.parse(chat[chat.length - 1].at || '') : NaN;
+    if (manual && chat.length && !isNaN(lastAt) && Date.now() - lastAt < 5 * 60000) {
+      toast('刚聊完，让它歇会儿');
+      return;
+    }
+    var hours = isNaN(lastAt) ? 24 : Math.max(1, Math.round((Date.now() - lastAt) / 3600000));
+
+    ui.proactiveBusy = true;
+
+    function deliver(text) {
+      ui.proactiveBusy = false;
+      C.appendChat(state, comp.id, { role: 'ai', text: text, proactive: true });
+      state.proactive.lastAt = new Date().toISOString();
+      persist();
+      if (ui.view === 'chat') {
+        renderChatList();
+      } else {
+        ui.chatUnread = true;
+        render();
+      }
+      toast(comp.name + '：' + text);
+    }
+
+    function fallback() {
+      deliver(PROACTIVE_POOL[Math.floor(Math.random() * PROACTIVE_POOL.length)]);
+    }
+
+    if (AI && AI.isReady()) {
+      AI.opener({
+        companion: comp,
+        memories: C.memoriesFor(state, comp.id),
+        chat: chat,
+        hours: hours,
+        onUsage: function (u) { C.addUsage(state, u.total_tokens || 0); }
+      }).then(deliver).catch(fallback);
+    } else {
+      fallback();
+    }
   }
 
   function testAi() {
@@ -1477,6 +1691,26 @@
       case 'test-ai': return testAi();
       case 'suggest-name': return suggestName();
       case 'self-write': return runSelfWrite(true);
+      case 'proactive': return maybeProactive(true);
+      case 'pick-budget': {
+        var bForm = el.closest('form');
+        if (!bForm) return;
+        bForm.elements.selfBudget.value = el.getAttribute('data-v');
+        $$('.preset-budget .chip', bForm).forEach(function (b) {
+          b.classList.toggle('on', b === el);
+        });
+        return;
+      }
+      case 'conflict-keep': {
+        var cc = ui.conflict;
+        if (!cc) return;
+        commitMemory(cc.companionId, cc.kind, cc.text, null);
+        toast('两条都留着');
+        return;
+      }
+      case 'scan-memory': return scanMemories();
+      case 'merge-memory':
+        return mergeMemories(el.getAttribute('data-a'), el.getAttribute('data-b'));
       case 'pick-persona': {
         var pForm = el.closest('form');
         var p = PERSONAS[Number(el.getAttribute('data-i'))];
@@ -1523,11 +1757,16 @@
       var text = mf.text.value.trim();
       if (!text) return;
       var target = ui.companionId !== 'all' ? ui.companionId : state.companions[0].id;
-      C.addMemory(state, { companionId: target, kind: mf.kind.value, text: text });
       mf.text.value = '';
-      persist();
-      render();
-      toast('记住了');
+      addMemoryChecked(target, mf.kind.value, text);
+      return;
+    }
+
+    if (form.dataset.form === 'mem-conflict') {
+      var cf2 = ui.conflict;
+      if (!cf2) return;
+      commitMemory(cf2.companionId, cf2.kind, cf2.text, cf2.top.memory.id);
+      toast('用新的替换掉了旧的');
       return;
     }
 
@@ -1536,8 +1775,16 @@
       state.ownerName = sf.ownerName.value.trim();
       if (sf.selfEnabled) {
         state.selfWrite.enabled = !!sf.selfEnabled.checked;
-        state.selfWrite.dailyTokens = Math.max(0, Number(sf.selfBudget.value) || 0);
+        if (sf.selfPeakPause) state.selfWrite.peakPause = !!sf.selfPeakPause.checked;
+        var budget = Number(sf.selfBudget.value);
+        state.selfWrite.dailyTokens = isFinite(budget)
+          ? Math.max(0, Math.min(200000, Math.round(budget)))
+          : 1500;
         state.selfWrite.intervalHours = Math.max(1, Number(sf.selfInterval.value) || 24);
+      }
+      if (sf.proEnabled) {
+        state.proactive.enabled = !!sf.proEnabled.checked;
+        state.proactive.afterHours = Math.max(1, Math.min(720, Number(sf.proHours.value) || 12));
       }
       try {
         AI.saveConfig({
@@ -1626,6 +1873,9 @@
     // 打开应用时补写它自己的那篇（关掉网页就不会跑）
     setTimeout(autoSelfWriteTick, 2500);
     setInterval(autoSelfWriteTick, 15 * 60 * 1000);
+
+    // 很久没聊的话，让它先开口
+    setTimeout(function () { maybeProactive(false); }, 4200);
   }
 
   if (document.readyState === 'loading') {
