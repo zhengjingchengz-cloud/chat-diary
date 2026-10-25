@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>e2e 交互测试</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+  <div id="app" class="app"></div>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast"></div>
+  <input type="file" id="import-file" hidden>
+  <pre id="out" style="position:fixed;left:-9999px">running</pre>
+  <script src="../assets/core.js"></script>
+  <script src="../assets/ai.js"></script>
+  <script src="../assets/app.js"></script>
+  <script>
+  (async function () {
+    var backupState = localStorage.getItem('chatdiary.state.v1');
+    var backupDemo = localStorage.getItem('chatdiary.demo.v1');
+    var backupAi = localStorage.getItem('chatdiary.ai.v1');
+
+    // 假的 API Key + 假的 fetch：整条请求/解析/渲染链路都能测，但不花钱、不联网
+    localStorage.setItem('chatdiary.ai.v1', JSON.stringify({
+      key: 'sk-test', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com'
+    }));
+    var fakeCalls = [];
+    window.fetch = function (url, opts) {
+      var body = JSON.parse((opts && opts.body) || '{}');
+      fakeCalls.push({ url: url, body: body });
+      var isJSON = !!(body.response_format && body.response_format.type === 'json_object');
+      var content = isJSON
+        ? JSON.stringify({
+            title: 'AI 写的标题',
+            mood: '心动',
+            tags: ['AI标签', '晚安'],
+            body: 'AI 整理的正文，写得很具体。',
+            quotes: [{ speaker: '鱼鱼', text: 'AI 抄下来的原话' }],
+            hook: '下次再问它'
+          })
+        : '咕噜咕噜，我在。';
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: function () { return Promise.resolve({ choices: [{ message: { content: content } }] }); },
+        text: function () { return Promise.resolve(''); }
+      });
+    };
+
+    var errors = [];
+    window.onerror = function (m, s, l) { errors.push(m + ' @' + l); };
+    window.confirm = function () { return true; };
+    window.__log = [];
+    function ok(name, cond) { window.__log.push((cond ? 'PASS ' : 'FAIL ') + name); }
+    function q(sel) { return document.querySelector(sel); }
+    function qa(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+    function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    try {
+      await wait(300);
+
+      // 从示例数据开始，保证可复现（走真实代码路径，不是直接改内存）
+      q('[data-action="settings"]').click();
+      await wait(60);
+      q('[data-action="seed-demo"]').click();
+      await wait(100);
+
+      var count0 = qa('.entry-card').length;
+      ok('初始渲染出日记列表', count0 === 4);
+
+      // --- 写一篇 ---
+      q('[data-action="new-entry"]').click();
+      await wait(60);
+      var form = q('form[data-form="entry"]');
+      ok('点「写一篇」打开弹窗', !!form);
+
+      form.elements.title.value = '自动化测试的一天';
+      form.elements.body.value = '这是自动化测试写下的正文，用来确认表单能存下来。';
+      form.elements.tags.value = '测试, 自动化';
+      q('[data-action="pick-mood"][data-mood="心动"]').click();
+      ok('选中心情被写进隐藏字段', form.elements.mood.value === '心动');
+
+      q('[data-action="add-quote"]').click();
+      await wait(40);
+      var rows = qa('.quote-row');
+      ok('「再加一句」多出一行', rows.length === 2);
+      rows[1].querySelector('.q-text').value = '我会记住你的。';
+
+      form.querySelector('button[type="submit"]').click();
+      await wait(120);
+      ok('保存后列表多一篇', qa('.entry-card').length === count0 + 1);
+      ok('保存后弹窗关闭', !q('form[data-form="entry"]'));
+      ok('新日记出现在页面上', document.body.textContent.indexOf('自动化测试的一天') > -1);
+
+      var saved = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      var added = saved.entries.filter(function (e) { return e.title === '自动化测试的一天'; })[0];
+      ok('写进了 localStorage', !!added);
+      ok('心情/标签/原话都存住了',
+        !!added && added.mood === '心动' && added.tags.length === 2 && added.quotes.length === 1);
+
+      // --- 搜索 ---
+      var input = q('#search-input');
+      input.value = '自动化';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(60);
+      ok('搜索只剩一篇', qa('.entry-card').length === 1);
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(60);
+
+      // --- 删除 ---
+      var newCard = qa('.entry-card').filter(function (c) {
+        return c.textContent.indexOf('自动化测试的一天') > -1;
+      })[0];
+      newCard.querySelector('[data-action="delete-entry"]').click();
+      await wait(80);
+      ok('删除后少一篇', qa('.entry-card').length === count0);
+
+      // --- 记忆卡 ---
+      q('[data-action="view"][data-view="memories"]').click();
+      await wait(80);
+      var memForm = q('form[data-form="memory"]');
+      ok('切到记忆卡视图', !!memForm);
+      var mem0 = qa('.mem').length;
+      memForm.elements.text.value = '自动化：这只鱼会吐泡泡。';
+      memForm.elements.kind.value = '口头禅';
+      memForm.querySelector('button[type="submit"]').click();
+      await wait(80);
+      ok('添加记忆卡成功', qa('.mem').length === mem0 + 1);
+
+      var pinCard = qa('.mem').filter(function (m) {
+        return m.textContent.indexOf('自动化：这只鱼会吐泡泡。') > -1;
+      })[0];
+      var pin = pinCard.querySelector('.pin-btn');
+      var pinnedBefore = pin.classList.contains('on');
+      pin.click();
+      await wait(60);
+      var pinAfter = qa('.mem').filter(function (m) {
+        return m.textContent.indexOf('自动化：这只鱼会吐泡泡。') > -1;
+      })[0].querySelector('.pin-btn');
+      ok('点图钉切换固定状态', pinAfter.classList.contains('on') !== pinnedBefore);
+      var pinnedSaved = JSON.parse(localStorage.getItem('chatdiary.state.v1')).memories
+        .filter(function (m) { return m.text.indexOf('自动化：') === 0; })[0];
+      ok('固定状态写进了 localStorage', !!pinnedSaved && pinnedSaved.pinned === true);
+
+      // --- 记忆包 ---
+      q('[data-action="view"][data-view="pack"]').click();
+      await wait(80);
+      var preview = q('#pack-preview');
+      var lenBefore = preview.value.length;
+      ok('记忆包有内容', !!preview && preview.value.length > 200);
+      ok('记忆包带上了身份设定', preview.value.indexOf('身份设定') > -1);
+      ok('记忆包带上了刚写的记忆', preview.value.indexOf('吐泡泡') > -1);
+      ok('钉住的记忆排在记忆清单前面',
+        preview.value.indexOf('吐泡泡') < preview.value.indexOf('不喜欢被叫'));
+
+      var range = q('#pack-entries');
+      range.value = '2';
+      range.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(60);
+      ok('拖到 2 篇时预览变短', q('#pack-preview').value.length < lenBefore);
+      ok('摘要数字同步', q('#pack-facts').textContent.indexOf('2 篇') > -1);
+
+      // --- 新建伙伴 ---
+      q('[data-action="new-companion"]').click();
+      await wait(60);
+      var cf = q('form[data-form="companion"]');
+      ok('打开新建伙伴弹窗', !!cf);
+      cf.elements.name.value = '测试伙伴';
+      q('.emoji-pick[data-emoji="🦊"]').click();
+      ok('选头像写进隐藏字段', cf.elements.emoji.value === '🦊');
+      cf.querySelector('button[type="submit"]').click();
+      await wait(100);
+      ok('新伙伴出现在侧栏', document.body.textContent.indexOf('测试伙伴') > -1);
+      ok('切换到了新伙伴', q('.comp.active .comp-name').textContent === '测试伙伴');
+
+      q('[data-action="view"][data-view="diary"]').click();
+      await wait(60);
+      ok('新伙伴还没有日记，显示空状态', !!q('.empty'));
+
+      // --- Esc 关弹窗 ---
+      q('[data-action="settings"]').click();
+      await wait(60);
+      ok('打开设置', !!q('form[data-form="settings"]'));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await wait(40);
+      ok('Esc 能关掉弹窗', !q('.modal-backdrop'));
+
+      /* ==================== 新增：对话 + 自动摘要 ==================== */
+
+      q('[data-action="select-companion"][data-id="c-fish"]').click();
+      await wait(80);
+
+      q('[data-action="view"][data-view="chat"]').click();
+      await wait(80);
+      ok('对话视图渲染出输入框', !!q('#chat-input'));
+
+      var ci = q('#chat-input');
+      ci.value = '我回来了';
+      ci.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await wait(250);
+      ok('发出的消息显示成我的气泡', qa('.bubble.me').length === 1);
+      ok('收到回复并渲染', qa('.bubble.ai').length === 1 &&
+        q('.bubble.ai').textContent.indexOf('咕噜') > -1);
+
+      var chatCall = fakeCalls.filter(function (c) { return !c.body.response_format; })[0];
+      ok('请求带了 system 提示', !!chatCall && chatCall.body.messages[0].role === 'system');
+      ok('system 提示里带着长期记忆',
+        !!chatCall && chatCall.body.messages[0].content.indexOf('吐泡泡') > -1);
+
+      var savedChat = JSON.parse(localStorage.getItem('chatdiary.state.v1')).chats['c-fish'];
+      ok('对话写进了 localStorage', savedChat.length === 2);
+
+      // 写成日记：打开导入弹窗并自动本地整理
+      q('[data-action="chat-to-diary"]').click();
+      await wait(150);
+      var logBox = q('#import-log');
+      ok('「写成日记」把对话带进了导入框',
+        !!logBox && logBox.value.indexOf('我：我回来了') > -1);
+      ok('自动做了本地整理', !!q('.imp-preview'));
+      var localTitle = q('.imp-preview h4').textContent;
+      ok('本地草稿有标题', !!localTitle && localTitle.length > 0);
+
+      // AI 精修
+      q('[data-action="import-ai"]').click();
+      await wait(300);
+      ok('AI 精修替换了草稿', q('.imp-preview h4').textContent === 'AI 写的标题');
+      ok('AI 草稿带上了标签', q('.imp-preview .chips').textContent.indexOf('AI标签') > -1);
+
+      var sumCall = fakeCalls.filter(function (c) { return c.body.response_format; })[0];
+      ok('摘要请求要求 JSON', !!sumCall && sumCall.body.response_format.type === 'json_object');
+      ok('摘要请求里带着记忆',
+        !!sumCall && sumCall.body.messages[1].content.indexOf('吐泡泡') > -1);
+
+      // 填进编辑器并保存
+      q('[data-action="import-apply"]').click();
+      await wait(100);
+      var ef = q('form[data-form="entry"]');
+      ok('「填进日记编辑器」打开了表单', !!ef);
+      ok('表单预填了 AI 标题', ef.elements.title.value === 'AI 写的标题');
+      ok('表单预填了正文', ef.elements.body.value.indexOf('AI 整理的正文') > -1);
+      ok('表单预填了原话', qa('.quote-row').length >= 1 &&
+        qa('.quote-row')[0].querySelector('.q-text').value.length > 0);
+
+      ef.querySelector('button[type="submit"]').click();
+      await wait(120);
+      ok('摘要出来的日记能存下来',
+        qa('.entry-card').some(function (c) { return c.textContent.indexOf('AI 写的标题') > -1; }));
+
+      // 没 Key 时应该显示引导卡片
+      localStorage.removeItem('chatdiary.ai.v1');
+      q('[data-action="view"][data-view="chat"]').click();
+      await wait(80);
+      ok('没有 Key 时显示引导卡片', !!q('.setup-card') && !q('#chat-input'));
+
+      ok('过程中没有 JS 报错', errors.length === 0);
+      if (errors.length) window.__log.push('ERRORS: ' + errors.join(' ;; '));
+    } catch (err) {
+      window.__log.push('EXCEPTION ' + (err && err.message) + '\n' + (err && err.stack));
+    }
+
+    // 还原 localStorage，别把测试数据留给真实页面
+    if (backupState === null) localStorage.removeItem('chatdiary.state.v1');
+    else localStorage.setItem('chatdiary.state.v1', backupState);
+    if (backupDemo === null) localStorage.removeItem('chatdiary.demo.v1');
+    else localStorage.setItem('chatdiary.demo.v1', backupDemo);
+    if (backupAi === null) localStorage.removeItem('chatdiary.ai.v1');
+    else localStorage.setItem('chatdiary.ai.v1', backupAi);
+
+    document.getElementById('out').textContent = window.__log.join('\n');
+  })();
+  </script>
+</body>
+</html>
