@@ -111,7 +111,8 @@
       entries: [],
       memories: [],
       chats: {},
-      selfWrite: { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '' },
+      selfWrite: { enabled: true, dailyTokens: 1500, intervalHours: 24, lastRunAt: '', peakPause: false },
+      proactive: { enabled: true, afterHours: 12, lastAt: '' },
       usage: { date: '', tokens: 0, calls: 0 },
       activeCompanionId: null
     };
@@ -227,7 +228,8 @@
           return {
             role: m && m.role === 'user' ? 'user' : 'ai',
             text: str(m && m.text, '').slice(0, 4000),
-            at: str(m && m.at, '')
+            at: str(m && m.at, ''),
+            proactive: !!(m && m.proactive)
           };
         })
         .filter(function (m) { return m.text; })
@@ -241,7 +243,16 @@
       enabled: sw.enabled !== false,
       dailyTokens: isFinite(budget) ? Math.max(0, Math.min(Math.round(budget), 200000)) : 1500,
       intervalHours: isFinite(interval) && interval >= 1 ? Math.min(Math.round(interval), 720) : 24,
-      lastRunAt: str(sw.lastRunAt, '')
+      lastRunAt: str(sw.lastRunAt, ''),
+      peakPause: sw.peakPause === true
+    };
+
+    var pro = raw.proactive && typeof raw.proactive === 'object' ? raw.proactive : {};
+    var proHours = Number(pro.afterHours);
+    state.proactive = {
+      enabled: pro.enabled !== false,
+      afterHours: isFinite(proHours) && proHours >= 1 ? Math.min(Math.round(proHours), 720) : 12,
+      lastAt: str(pro.lastAt, '')
     };
 
     var u = raw.usage && typeof raw.usage === 'object' ? raw.usage : {};
@@ -571,6 +582,7 @@
     state.chats[moon.id] = [];
     // 示例刚建好时不立刻自述，等一个周期（或用户手动点「让它写一篇」）
     state.selfWrite.lastRunAt = new Date().toISOString();
+    state.proactive.lastAt = new Date().toISOString();
     state.usage = { date: todayISO(), tokens: 0, calls: 0 };
 
     state.entries = [
@@ -916,7 +928,8 @@
     chat.push({
       role: message.role === 'user' ? 'user' : 'ai',
       text: String(message.text || ''),
-      at: message.at || new Date().toISOString()
+      at: message.at || new Date().toISOString(),
+      proactive: !!message.proactive
     });
     while (chat.length > 60) chat.shift();
     return chat;
@@ -966,17 +979,99 @@
     if (cap <= 0) return { due: false, reason: 'off' };
     if (used >= cap) return { due: false, reason: 'budget', used: used, cap: cap };
 
+    var now = nowMs == null ? Date.now() : nowMs;
+    if (sw.peakPause && isPeakHour(now)) {
+      return { due: false, reason: 'peak', used: used, cap: cap };
+    }
+
     var interval = Math.max(1, Number(sw.intervalHours) || 24);
     if (sw.lastRunAt) {
       var last = Date.parse(sw.lastRunAt);
       if (!isNaN(last)) {
-        var hours = ((nowMs == null ? Date.now() : nowMs) - last) / 3600000;
+        var hours = (now - last) / 3600000;
         if (hours < interval) {
           return { due: false, reason: 'tooSoon', hoursLeft: Math.max(0, interval - hours), used: used, cap: cap };
         }
       }
     }
     return { due: true, reason: 'ok', used: used, cap: cap };
+  }
+
+  /** DeepSeek 的优惠时段：北京时间 00:30–08:30 */
+  function isOffPeakHour(nowMs) {
+    var d = new Date(nowMs == null ? Date.now() : nowMs);
+    var m = d.getHours() * 60 + d.getMinutes();
+    return m >= 30 && m < 510;
+  }
+
+  function isPeakHour(nowMs) {
+    return !isOffPeakHour(nowMs);
+  }
+
+  /** 下一个优惠时段开始的本地时间文字，例如 "明天 00:30" */
+  function nextOffPeakText(nowMs) {
+    var now = new Date(nowMs == null ? Date.now() : nowMs);
+    var start = new Date(now.getTime());
+    start.setHours(0, 30, 0, 0);
+    if (start.getTime() <= now.getTime()) {
+      if (isOffPeakHour(now.getTime())) return '现在';
+      start = new Date(start.getTime() + 86400000);
+    }
+    var isTomorrow = start.getDate() !== now.getDate();
+    return (isTomorrow ? '明天 ' : '今天 ') + '00:30';
+  }
+
+  /* ---------- 记忆冲突 ---------- */
+
+  function normalizeForCompare(text) {
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[\s，。、,.！!？?「」『』"'':：;；~～\-—_（）()]/g, '');
+  }
+
+  function bigrams(text) {
+    var s = normalizeForCompare(text);
+    var set = {};
+    for (var i = 0; i < s.length - 1; i++) set[s.slice(i, i + 2)] = 1;
+    return Object.keys(set);
+  }
+
+  /** 0~1：两条记忆有多像（用二元组的包含度，短句也能比） */
+  function memorySimilarity(a, b) {
+    var A = bigrams(a);
+    var B = bigrams(b);
+    if (!A.length || !B.length) return 0;
+    var hit = 0;
+    for (var i = 0; i < A.length; i++) if (B.indexOf(A[i]) >= 0) hit += 1;
+    return hit / Math.min(A.length, B.length);
+  }
+
+  /**
+   * 找和这句话很像的旧记忆（可能是同一件事的新说法）。
+   * 完全一样的不算"冲突"，那是重复。
+   */
+  function findMemoryConflicts(state, companionId, text, excludeId, threshold) {
+    var min = typeof threshold === 'number' ? threshold : 0.5;
+    return memoriesFor(state, companionId)
+      .filter(function (m) { return m.id !== excludeId && m.text !== text; })
+      .map(function (m) { return { memory: m, score: memorySimilarity(text, m.text) }; })
+      .filter(function (x) { return x.score >= min && x.score < 1; })
+      .sort(function (a, b) { return b.score - a.score; })
+      .slice(0, 3);
+  }
+
+  /** 全量扫一遍：所有可能重复/打架的记忆对 */
+  function scanMemoryDuplicates(state, companionId, threshold) {
+    var min = typeof threshold === 'number' ? threshold : 0.55;
+    var list = memoriesFor(state, companionId);
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        var score = memorySimilarity(list[i].text, list[j].text);
+        if (score >= min) out.push({ a: list[i], b: list[j], score: score });
+      }
+    }
+    return out.sort(function (x, y) { return y.score - x.score; });
   }
 
   /** 这条记忆是不是已经有了（去重，避免天天记同一件事） */
@@ -1055,8 +1150,14 @@
     usageToday: usageToday,
     addUsage: addUsage,
     selfWriteDue: selfWriteDue,
+    isOffPeakHour: isOffPeakHour,
+    isPeakHour: isPeakHour,
+    nextOffPeakText: nextOffPeakText,
     hasMemory: hasMemory,
     markSelfWrite: markSelfWrite,
+    memorySimilarity: memorySimilarity,
+    findMemoryConflicts: findMemoryConflicts,
+    scanMemoryDuplicates: scanMemoryDuplicates,
     // 导入导出
     exportJSON: exportJSON,
     parseImport: parseImport,
