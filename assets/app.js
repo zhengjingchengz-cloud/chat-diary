@@ -1195,8 +1195,10 @@
       : '还没主动说过话';
     var peakNow = C.isPeakHour(Date.now());
     var peakNote = sw.peakPause
-      ? (peakNow ? '现在是高峰期，不会自动写；下次可写：' + C.nextOffPeakText() : '现在是优惠时段，可以自动写。')
-      : '高峰期也写，费用按原价。';
+      ? (peakNow
+        ? '现在是高峰时段（原价），不会自动写；' + C.nextOffPeakText() + ' 起才写。'
+        : '现在是优惠时段（半价），可以自动写。')
+      : '高峰期也写，按原价计费。';
 
     openModal(
       '<form class="modal" data-form="settings">' +
@@ -1232,7 +1234,7 @@
               '<span class="ai-state' + (sw.enabled ? ' on' : '') + '">' + (sw.enabled ? '已开启' : '已关闭') + '</span>' +
             '</div>' +
             '<label class="switch"><input type="checkbox" name="selfEnabled"' + (sw.enabled ? ' checked' : '') + '> 打开应用时，让它补写当天的那一篇</label>' +
-            '<label class="switch"><input type="checkbox" name="selfPeakPause"' + (sw.peakPause ? ' checked' : '') + '> 高峰期（08:30–00:30）不写，等优惠时段' +
+            '<label class="switch"><input type="checkbox" name="selfPeakPause"' + (sw.peakPause ? ' checked' : '') + '> 只在优惠时段写（工作日高峰不写）' +
               '<span class="f-note" style="margin-left:4px">省一半钱</span></label>' +
             '<div class="row">' +
               '<label class="f"><span>每天最多用多少 token（可自己填）</span>' +
@@ -1246,6 +1248,7 @@
               '<button type="button" class="chip" data-action="pick-budget" data-v="0">0（关闭额度）</button>' +
             '</div>' +
             '<div class="pack-facts">今天自述已用 <b>' + used + '</b> / <b>' + sw.dailyTokens + '</b> tokens · 上次写于 <b>' + lastRunText + '</b>' +
+              '<br>高峰：工作日 ' + esc(C.peakWindowsText()) + '（原价）；其余时间半价，周末和法定节假日全天优惠。' +
               '<br>' + esc(peakNote) + '</div>' +
             '<div class="pack-actions">' +
               '<button type="button" class="btn line sm" data-action="self-write">现在写一篇</button>' +
