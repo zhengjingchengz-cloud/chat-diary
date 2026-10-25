@@ -228,6 +228,15 @@ button { cursor: pointer; }
 .nav-item.active { background: var(--ink); color: #fff8f0; }
 .nav-item .ico { width: 18px; text-align: center; font-size: 14px; }
 
+.nav-item .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--accent);
+  margin-left: auto;
+  box-shadow: 0 0 0 3px rgba(244, 112, 63, .16);
+}
+
 .side-foot {
   margin-top: auto;
   padding-top: 14px;
@@ -740,6 +749,15 @@ button { cursor: pointer; }
 
 .memory-add input:focus { border-color: #f3b79c; box-shadow: 0 0 0 3.5px rgba(244, 112, 63, .10); }
 
+.memory-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -8px 0 16px;
+  padding: 0 2px;
+}
+
 .memory-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
@@ -1000,6 +1018,7 @@ label.f {
 }
 
 label.f input[type="text"],
+label.f input[type="number"],
 label.f input[type="date"],
 label.f select,
 label.f textarea {
@@ -1348,6 +1367,46 @@ label.f input:focus, label.f select:focus, label.f textarea:focus {
 }
 
 .f-note { font-size: 11px; color: var(--ink-3); }
+
+/* 记忆冲突 */
+.conflict-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fbf6ee;
+  border: 1px solid var(--line-2);
+  margin-bottom: 12px;
+}
+
+.conflict-side span {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: .5px;
+  color: var(--ink-3);
+  margin-bottom: 3px;
+}
+
+.conflict-side p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #453d37;
+}
+
+.conflict-side.old {
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.conflict-side.old p { color: var(--ink-2); }
+
+.conflict-pair .btn { align-self: flex-start; margin-top: 4px; }
+
+/* 额度预设 */
+.preset-budget { margin-top: -4px; }
+.preset-budget .chip { font-size: 11.5px; padding: 4px 10px; }
 
 .btn:disabled {
   opacity: .45;
