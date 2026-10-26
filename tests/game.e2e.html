@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>谁是卧底 · 交互测试</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+  <div id="app" class="app"></div>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast"></div>
+  <input type="file" id="import-file" hidden>
+  <pre id="out" style="position:fixed;left:-9999px">running</pre>
+  <script src="../assets/core.js"></script>
+  <script src="../assets/ai.js"></script>
+  <script src="../assets/game.js"></script>
+  <script src="../assets/app.js"></script>
+  <script>
+  (async function () {
+    var backupState = localStorage.getItem('chatdiary.state.v1');
+    var backupDemo = localStorage.getItem('chatdiary.demo.v1');
+    var backupAi = localStorage.getItem('chatdiary.ai.v1');
+    var backupGame = localStorage.getItem('chatdiary.game.v1');
+
+    localStorage.removeItem('chatdiary.game.v1');
+    localStorage.setItem('chatdiary.ai.v1', JSON.stringify({
+      key: 'sk-test', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com'
+    }));
+
+    // 假接口：说得像人话，投票随机选一个候选
+    window.fetch = function (url, opts) {
+      var body = JSON.parse((opts && opts.body) || '{}');
+      var sys = (body.messages && body.messages[0] && body.messages[0].content) || '';
+      var user = (body.messages && body.messages[1] && body.messages[1].content) || '';
+      var content;
+
+      if (sys.indexOf('谁是卧底') > -1 && sys.indexOf('投票') > -1) {
+        var m = /可以投的人：(.+?)（/.exec(user);
+        var names = m ? m[1].split('、').filter(Boolean) : [];
+        var pick = names[Math.floor(Math.random() * names.length)] || '';
+        content = JSON.stringify({ target: pick, reason: '感觉他有点不一样' });
+      } else if (sys.indexOf('谁是卧底') > -1) {
+        var lines = ['这个我几乎天天都能见到', '挺常见的，不过我不太挑', '我身边很多人喜欢它', '跟它有关的东西都不便宜'];
+        content = lines[Math.floor(Math.random() * lines.length)];
+      } else {
+        content = '好的';
+      }
+
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: function () {
+          return Promise.resolve({
+            choices: [{ message: { content: content } }],
+            usage: { prompt_tokens: 100, completion_tokens: 30, total_tokens: 130 }
+          });
+        },
+        text: function () { return Promise.resolve(''); }
+      });
+    };
+
+    var errors = [];
+    window.onerror = function (m, s, l) { errors.push(m + ' @' + l); };
+    window.confirm = function () { return true; };
+    window.__log = [];
+    function ok(name, cond) { window.__log.push((cond ? 'PASS ' : 'FAIL ') + name); }
+    function q(sel) { return document.querySelector(sel); }
+    function qa(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+    function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    function until(fn, timeout) {
+      var t0 = Date.now();
+      return new Promise(function (resolve) {
+        (function loop() {
+          if (fn() || Date.now() - t0 > (timeout || 40000)) return resolve(!!fn());
+          setTimeout(loop, 120);
+        })();
+      });
+    }
+
+    try {
+      await wait(400);
+
+      // 从示例数据开始
+      q('[data-action="settings"]').click();
+      await wait(80);
+      q('[data-action="seed-demo"]').click();
+      await wait(150);
+
+      q('[data-action="view"][data-view="game"]').click();
+      await wait(120);
+      ok('游戏页打开', !!q('.lobby'));
+      ok('可以选伙伴', qa('.pick-chip').length >= 2);
+
+      // 只有两个伙伴，补两个 NPC 凑够 4 人
+      q('[data-action="add-npc"]').click();
+      await wait(80);
+      q('[data-action="add-npc"]').click();
+      await wait(80);
+      var facts = q('.lobby-facts').textContent;
+      ok('人数凑到 5 人', facts.indexOf('5') > -1);
+
+      q('[data-action="start-game"]').click();
+      await wait(300);
+      ok('开局后进入牌桌', !!q('.game-log'));
+      ok('显示了我的词', !!q('.game-word'));
+
+      // 自动替"我"发言、投票
+      var auto = setInterval(function () {
+        var f = q('form[data-form="game-speak"]');
+        if (f) { f.elements.text.value = '我觉得它挺常见的，每天都见得到'; f.querySelector('button[type="submit"]').click(); return; }
+        var v = q('.game-vote .btn');
+        if (v) v.click();
+      }, 200);
+
+      var over = await until(function () { return !!q('.game-over'); }, 45000);
+      clearInterval(auto);
+
+      ok('一局能打完（出现结算）', over);
+      ok('发言记录有不少条', qa('.gmsg').length > 8);
+      ok('有人被投出并揭示身份', qa('.gmsg.reveal').length >= 1 || qa('.gmsg.sys').length >= 2);
+      ok('结算面板显示赢家', !!q('.game-over b'));
+
+      var st = JSON.parse(localStorage.getItem('chatdiary.state.v1'));
+      var entry = st.entries.filter(function (e) { return e.title.indexOf('谁是卧底') > -1; })[0];
+      ok('局后自动写了一篇日记', !!entry);
+      ok('日记里提到玩过这局', !!entry && entry.body.indexOf('谁是卧底') > -1);
+      ok('给参演的伙伴写了记忆',
+        st.memories.some(function (m) { return m.text.indexOf('谁是卧底') > -1; }));
+
+      var g = JSON.parse(localStorage.getItem('chatdiary.game.v1'));
+      ok('对局存档写进了 localStorage', !!g && !!g.winner);
+      ok('存档里有完整发言', !!g && g.speeches.length >= 4);
+
+      // 再来一局 → 回到大厅
+      q('[data-action="game-again"]').click();
+      await wait(150);
+      ok('「再来一局」回到大厅', !!q('.lobby'));
+
+      ok('过程中没有 JS 报错', errors.length === 0);
+      if (errors.length) window.__log.push('ERRORS: ' + errors.join(' ;; '));
+    } catch (err) {
+      window.__log.push('EXCEPTION ' + (err && err.message) + '\n' + (err && err.stack));
+    }
+
+    if (backupState === null) localStorage.removeItem('chatdiary.state.v1');
+    else localStorage.setItem('chatdiary.state.v1', backupState);
+    if (backupDemo === null) localStorage.removeItem('chatdiary.demo.v1');
+    else localStorage.setItem('chatdiary.demo.v1', backupDemo);
+    if (backupAi === null) localStorage.removeItem('chatdiary.ai.v1');
+    else localStorage.setItem('chatdiary.ai.v1', backupAi);
+    if (backupGame === null) localStorage.removeItem('chatdiary.game.v1');
+    else localStorage.setItem('chatdiary.game.v1', backupGame);
+
+    document.getElementById('out').textContent = window.__log.join('\n');
+  })();
+  </script>
+</body>
+</html>
