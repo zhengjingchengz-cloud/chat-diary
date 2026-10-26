@@ -1195,12 +1195,16 @@
       : '还没主动说过话';
     var peakNow = C.isPeakHour(Date.now());
     var holidayToday = C.isCnHoliday(C.beijingDateStr(Date.now()));
-    var peakNote = (holidayToday ? '今天是法定节假日，官方全天按优惠价。' : '') +
-      (sw.peakPause
-        ? (peakNow
-          ? '现在是高峰时段（原价），不会自动写；' + C.nextOffPeakText() + ' 起才写。'
-          : '现在是优惠时段（半价），可以自动写。')
-        : '高峰期也写，按原价计费。');
+    var peakNote;
+    if (holidayToday) {
+      peakNote = '今天是法定节假日，官方全天按优惠价——今天什么时候写都不加价。';
+    } else if (sw.peakPause) {
+      peakNote = peakNow
+        ? '现在是高峰时段（原价），不会自动写；' + C.nextOffPeakText() + ' 起才写。'
+        : '现在是优惠时段（半价），可以自动写。';
+    } else {
+      peakNote = '高峰期也写，按原价计费。';
+    }
 
     openModal(
       '<form class="modal" data-form="settings">' +
