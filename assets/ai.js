@@ -418,6 +418,78 @@
       });
   }
 
+  /* ---------------- 谁是卧底 ---------------- */
+
+  /** 玩家发言：只说一句，不能说出自己的词 */
+  function gameSpeak(p) {
+    var system = '你在玩「谁是卧底」游戏。你只知道自己的词，不知道别人拿到的是什么，也不知道自己是不是卧底。只输出一句话，不要解释。';
+
+    var history = (p.history || []).map(function (h) {
+      return h.name + '：' + h.text;
+    }).join('\n');
+
+    var user = [
+      '你的词是「' + p.word + '」。',
+      '规则：每个人用一句话描述自己的词，不能说出这个词本身，也不能说出其中的字。',
+      '已经说过的：',
+      history || '（你是第一个说的）',
+      '',
+      '现在轮到你。要求：',
+      '- 只说一句，14-30 个字，像随口描述，不要引号、不要解释。',
+      '- 说一个只有拿到这个词的人才懂的特征，但别太直白。',
+      '- 不要重复别人说过的话。'
+    ].join('\n');
+
+    return request([
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ], { temperature: 0.95, maxTokens: 80, onUsage: p.onUsage })
+      .then(function (text) {
+        return String(text || '')
+          .split('\n')[0]
+          .replace(/^["「『']|["」』']$/g, '')
+          .trim()
+          .slice(0, 60);
+      })
+      .then(function (t) {
+        if (!t) throw new Error('它没想好怎么说');
+        return t;
+      });
+  }
+
+  /** 玩家投票：只输出 JSON */
+  function gameVote(p) {
+    var history = (p.history || []).map(function (h) {
+      return h.name + '：' + h.text;
+    }).join('\n');
+
+    var cands = (p.candidates || []).map(function (c) { return c.name; }).join('、');
+
+    var system = '你在玩「谁是卧底」。现在要投票投出一个人。只输出 JSON，不要解释。';
+    var user = [
+      '你的词是「' + p.word + '」。',
+      '大家这一轮的描述：',
+      history || '（没有记录）',
+      '',
+      '可以投的人：' + cands + '（不能投自己）',
+      '',
+      '请选出你觉得最像卧底的人，只输出：',
+      '{"target":"名字","reason":"一句话，15 字以内"}'
+    ].join('\n');
+
+    return request([
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ], { json: true, temperature: 0.7, maxTokens: 120, onUsage: p.onUsage })
+      .then(function (text) {
+        var o = extractJSON(text);
+        return {
+          target: String((o && o.target) || '').trim(),
+          reason: String((o && o.reason) || '').trim().slice(0, 40)
+        };
+      });
+  }
+
   return {
     DEFAULTS: DEFAULTS,
     loadConfig: loadConfig,
@@ -432,6 +504,8 @@
     suggestCompanion: suggestCompanion,
     selfWrite: selfWrite,
     opener: opener,
+    gameSpeak: gameSpeak,
+    gameVote: gameVote,
     reply: reply,
     test: test
   };
