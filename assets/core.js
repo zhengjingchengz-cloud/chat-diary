@@ -998,15 +998,58 @@
   }
 
   /**
+   * 中国法定节假日（放假的日期）。
+   * 来源：国办发明电〔2025〕7 号《国务院办公厅关于 2026 年部分节假日安排的通知》
+   * https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm
+   * 每年 11 月前后国务院公布次年安排，到时候补一年即可。
+   */
+  var CN_HOLIDAYS = {
+    '2026': [
+      // 元旦 1/1–1/3（1/4 周日上班）
+      '01-01', '01-02', '01-03',
+      // 春节 2/15–2/23（2/14、2/28 周六上班）
+      '02-15', '02-16', '02-17', '02-18', '02-19', '02-20', '02-21', '02-22', '02-23',
+      // 清明 4/4–4/6
+      '04-04', '04-05', '04-06',
+      // 劳动节 5/1–5/5（5/9 周六上班）
+      '05-01', '05-02', '05-03', '05-04', '05-05',
+      // 端午 6/19–6/21
+      '06-19', '06-20', '06-21',
+      // 中秋 9/25–9/27
+      '09-25', '09-26', '09-27',
+      // 国庆 10/1–10/7（9/20 周日、10/10 周六上班）
+      '10-01', '10-02', '10-03', '10-04', '10-05', '10-06', '10-07'
+    ]
+  };
+
+  function pad2b(n) { return n < 10 ? '0' + n : String(n); }
+
+  /** 北京时间（UTC+8）的 YYYY-MM-DD，和运行设备的时区无关 */
+  function beijingDateStr(nowMs) {
+    var d = new Date((nowMs == null ? Date.now() : nowMs) + 8 * 3600 * 1000);
+    return d.getUTCFullYear() + '-' + pad2b(d.getUTCMonth() + 1) + '-' + pad2b(d.getUTCDate());
+  }
+
+  /** 这天是不是中国法定节假日（只看放假日；调休上班日按周末算，本来就不是高峰） */
+  function isCnHoliday(dateStr) {
+    var s = String(dateStr || '');
+    var list = CN_HOLIDAYS[s.slice(0, 4)];
+    return !!list && list.indexOf(s.slice(5, 10)) >= 0;
+  }
+
+  /**
    * DeepSeek 官方定价规则（2026 版）：
    *   高峰 = UTC 01:00–04:00 与 06:00–10:00，周一至周五（中国法定节假日除外）
-   *   其余时间（含周末）全部按优惠价
+   *   其余时间（含周末、法定节假日）全部按优惠价
    * 用 UTC 判断，所以在任何时区都算得对。
    */
   var PEAK_UTC_WINDOWS = [[60, 240], [360, 600]];
 
   function isPeakHour(nowMs) {
-    var d = new Date(nowMs == null ? Date.now() : nowMs);
+    var t = nowMs == null ? Date.now() : nowMs;
+    if (isCnHoliday(beijingDateStr(t))) return false;
+
+    var d = new Date(t);
     var day = d.getUTCDay();
     if (day === 0 || day === 6) return false;
     var m = d.getUTCHours() * 60 + d.getUTCMinutes();
@@ -1179,6 +1222,8 @@
     selfWriteDue: selfWriteDue,
     isOffPeakHour: isOffPeakHour,
     isPeakHour: isPeakHour,
+    beijingDateStr: beijingDateStr,
+    isCnHoliday: isCnHoliday,
     peakWindowsText: peakWindowsText,
     nextOffPeakText: nextOffPeakText,
     hasMemory: hasMemory,
