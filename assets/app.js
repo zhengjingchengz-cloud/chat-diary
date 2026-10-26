@@ -7,6 +7,7 @@
 
   var C = window.DiaryCore;
   var AI = window.DiaryAI;
+  var G = window.DiaryGame;
   var LS_STATE = 'chatdiary.state.v1';
   var LS_DEMO = 'chatdiary.demo.v1';
 
@@ -49,8 +50,19 @@
     selfBusy: false,
     chatUnread: false,
     proactiveBusy: false,
-    conflict: null
+    conflict: null,
+    game: { busy: false, paused: false, timer: null, pick: null }
   };
+
+  var LS_GAME = 'chatdiary.game.v1';
+
+  var GAME_FALLBACK_LINES = [
+    '这个东西我平时还挺常用的。',
+    '说不上来，反正挺日常的。',
+    '你们说的我怎么有点听不懂。',
+    '反正我拿到的是这个，你们自己判断吧。',
+    '我形容不好，但它挺常见的。'
+  ];
 
   /* 没 Key 时也能"主动开口"的备用句子 */
   var PROACTIVE_POOL = [
@@ -184,6 +196,12 @@
       next.scrollTop = top;
       next.style.scrollBehavior = prev || '';
     }
+
+    if (ui.view === 'game') {
+      var lg = byId('game-log');
+      if (lg) lg.scrollTop = lg.scrollHeight;
+    }
+
     updateSaveDot();
   }
 
@@ -230,6 +248,7 @@
       '<nav class="view-nav">' +
         navItem('diary', '📝', '日记') +
         navItem('chat', '💬', '对话') +
+        navItem('game', '🎲', '游戏') +
         navItem('memories', '📌', '记忆卡') +
         navItem('pack', '✨', '记忆包') +
       '</nav>' +
@@ -255,6 +274,7 @@
     var comp = companion();
     var crumb = ui.view === 'diary' ? '日记'
       : ui.view === 'chat' ? '对话'
+      : ui.view === 'game' ? '游戏'
       : ui.view === 'memories' ? '记忆卡' : '记忆包';
     var primary = ui.view === 'chat'
       ? '<button class="btn primary" data-action="chat-to-diary">✎ 写成日记</button>'
@@ -279,6 +299,7 @@
     if (ui.view === 'memories') return memoriesView();
     if (ui.view === 'pack') return packView();
     if (ui.view === 'chat') return chatView();
+    if (ui.view === 'game') return gameView();
     return diaryView();
   }
 
@@ -581,6 +602,384 @@
       ui.chat.error = err.message || '出错了';
       renderChatList();
     });
+  }
+
+  /* ---------------------------- 谁是卧底 ---------------------------- */
+
+  function loadStoredGame() {
+    try {
+      var raw = localStorage.getItem(LS_GAME);
+      if (!raw) return null;
+      var g = JSON.parse(raw);
+      if (!g || !Array.isArray(g.players) || !g.players.length) return null;
+      if (g.winner) return null;
+      return g;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function saveGame() {
+    try {
+      if (state.game) localStorage.setItem(LS_GAME, JSON.stringify(state.game));
+      else localStorage.removeItem(LS_GAME);
+    } catch (err) { /* 存不下就算了，游戏还能继续 */ }
+  }
+
+  function gamePick() {
+    if (!ui.game.pick) {
+      ui.game.pick = {
+        companions: state.companions.slice(0, 4).map(function (c) { return c.id; }),
+        npcs: []
+      };
+    }
+    return ui.game.pick;
+  }
+
+  function gameView() {
+    if (state.game) return gameTableView();
+    return gameLobbyView();
+  }
+
+  function gameLobbyView() {
+    if (!state.companions.length) return firstRunView();
+    var pick = gamePick();
+    var chips = state.companions.map(function (c) {
+      var on = pick.companions.indexOf(c.id) >= 0;
+      return '<button class="pick-chip' + (on ? ' on' : '') + '" data-action="toggle-pick" data-id="' + esc(c.id) + '">' +
+        esc(c.emoji + ' ' + c.name) + '</button>';
+    }).join('');
+
+    var npcs = pick.npcs.map(function (n, i) {
+      return '<button class="pick-chip on npc" data-action="drop-npc" data-i="' + i + '">🎭 ' + esc(n.name) + ' ✕</button>';
+    }).join('');
+
+    var total = 1 + pick.companions.length + pick.npcs.length;
+    var hint = total < 4 ? '至少再加 ' + (4 - total) + ' 个人'
+      : total > 6 ? '最多 6 个人' : '';
+
+    return '<section class="view">' +
+      '<div class="view-head">' +
+        '<h2>🎲 谁是卧底</h2>' +
+        '<p>一个伙伴拿到的是相近的另一个词——那就是卧底。每人用一句话描述自己的词，说不出来太明显的那个就投他。</p>' +
+      '</div>' +
+      '<div class="lobby">' +
+        '<div class="lobby-row"><span class="lobby-label">和你一起玩</span>' +
+          '<div class="chips">' + chips + npcs +
+            '<button class="pick-chip add" data-action="add-npc">＋ 临时 NPC</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="lobby-facts">现在 <b>' + total + '</b> 人（含你）· 需要 4–6 人 · 一局大约 30 次模型调用</div>' +
+        '<div class="lobby-actions">' +
+          '<button class="btn primary" data-action="start-game"' + (hint ? ' disabled' : '') + '>开局</button>' +
+          '<span class="f-note">' + esc(hint) + '</span>' +
+        '</div>' +
+      '</div>' +
+      '</section>';
+  }
+
+  function gamePhaseText(g) {
+    if (g.winner) return '已结束';
+    if (g.phase === 'describe') return '第 ' + g.round + ' 轮 · 发言';
+    if (g.phase === 'vote') return '第 ' + g.round + ' 轮 · 投票';
+    if (g.phase === 'result') return '第 ' + g.round + ' 轮 · 公布';
+    return '第 ' + g.round + ' 轮';
+  }
+
+  function gameTableView() {
+    var g = state.game;
+    var me = G.me(g);
+    var over = !!g.winner;
+
+    var players = g.players.map(function (p) {
+      var cls = 'gp' + (p.alive ? '' : ' dead') + (p.isMe ? ' me' : '');
+      var role = (over || !p.alive)
+        ? '<i>' + (p.role === 'undercover' ? '卧底' : '平民') + '</i>' : '';
+      return '<span class="' + cls + '">' + esc(p.emoji) + ' ' +
+        esc(p.isMe ? '你' : p.name) + role + '</span>';
+    }).join('');
+
+    var wordCard = me
+      ? '<div class="game-word">你的词：<b>' + esc(me.word) + '</b>' +
+        '<span class="f-note">别说出来，也别说出里面的字</span></div>'
+      : '';
+
+    return '<section class="view">' +
+      '<div class="game-head">' +
+        '<div class="game-round">' + esc(gamePhaseText(g)) + '</div>' +
+        '<div class="game-controls">' +
+          (over ? '' : '<button class="btn line sm" data-action="toggle-pause">' + (ui.game.paused ? '继续' : '暂停') + '</button>') +
+          '<button class="btn ghost sm" data-action="quit-game">离开牌桌</button>' +
+        '</div>' +
+      '</div>' +
+      wordCard +
+      '<div class="game-players">' + players + '</div>' +
+      (over ? gameOverHtml(g) : '') +
+      '<div class="game-log" id="game-log">' + gameLogHtml(g) + '</div>' +
+      gameActionHtml(g) +
+      '</section>';
+  }
+
+  function gameLogHtml(g) {
+    return g.log.map(function (e) {
+      if (e.kind === 'system') return '<div class="gmsg sys">' + esc(e.text) + '</div>';
+      if (e.kind === 'speech') {
+        var p = G.byId(g, e.playerId);
+        var who = p ? (p.isMe ? '你' : p.emoji + ' ' + p.name) : '？';
+        return '<div class="gmsg' + (p && p.isMe ? ' mine' : '') + '">' +
+          '<span class="gname">' + esc(who) + '</span>' +
+          '<span class="gtext">' + esc(e.text) + '</span></div>';
+      }
+      if (e.kind === 'vote') {
+        var f = G.byId(g, e.playerId);
+        var t = G.byId(g, e.targetId);
+        return '<div class="gmsg vote">' + esc(f ? f.name : '？') + ' 投给了 ' + esc(t ? t.name : '？') + '</div>';
+      }
+      if (e.kind === 'reveal') return '<div class="gmsg reveal">' + esc(e.text) + '</div>';
+      return '';
+    }).join('');
+  }
+
+  function gameOverHtml(g) {
+    var win = g.winner === 'civilian' ? '平民赢了' : '卧底赢了';
+    return '<div class="game-over">' +
+      '<b>' + esc(win) + '</b>' +
+      '<span>这局已经写进日记，每个人也记下了一条</span>' +
+      '<button class="btn primary sm" data-action="game-again">再来一局</button>' +
+      '</div>';
+  }
+
+  function gameActionHtml(g) {
+    if (g.winner) return '';
+
+    var me = G.me(g);
+    if (!me) return '';
+
+    if (!me.alive) {
+      return '<div class="game-action-hint">你出局了，看着他们玩完这局。</div>';
+    }
+
+    if (g.phase === 'describe') {
+      var cur = G.currentSpeaker(g);
+      if (cur && cur.isMe) {
+        return '<form class="game-input" data-form="game-speak">' +
+          '<input name="text" maxlength="60" autocomplete="off" placeholder="一句话描述你的词，别说出它…" autofocus>' +
+          '<button class="btn primary sm" type="submit">说</button>' +
+          '</form>';
+      }
+      return '<div class="game-action-hint">' +
+        (ui.game.busy ? '…' + esc(cur ? cur.name : '') + ' 正在想' : '等 ' + esc(cur ? cur.name : '') + ' 说完') +
+        '</div>';
+    }
+
+    if (g.phase === 'vote') {
+      var voted = g.votes.some(function (v) { return v.from === me.id; });
+      if (voted) return '<div class="game-action-hint">你已经投过了，等其他人。</div>';
+      var cands = G.alivePlayers(g).filter(function (p) { return p.id !== me.id; })
+        .map(function (p) {
+          return '<button class="btn line sm" data-action="cast-vote" data-id="' + esc(p.id) + '">投 ' +
+            esc(p.emoji + ' ' + p.name) + '</button>';
+        }).join('');
+      return '<div class="game-vote">' + cands + '</div>';
+    }
+
+    return '<div class="game-action-hint">…</div>';
+  }
+
+  function scheduleTick(delay) {
+    clearTimeout(ui.game.timer);
+    ui.game.timer = setTimeout(gameTick, delay == null ? 700 : delay);
+  }
+
+  function gameUsage(u) { C.addUsage(state, u.total_tokens || 0); }
+
+  function gameHistory(g) {
+    return g.speeches
+      .filter(function (s) { return s.round === g.round; })
+      .map(function (s) {
+        var p = G.byId(g, s.playerId);
+        return { name: p ? p.name : '？', text: s.text };
+      });
+  }
+
+  function gameTick() {
+    var g = state.game;
+    if (!g || g.winner || ui.game.busy || ui.game.paused) return;
+
+    if (g.phase === 'describe') {
+      var cur = G.currentSpeaker(g);
+      if (!cur) return;
+      if (cur.isMe) { render(); return; }
+
+      ui.game.busy = true;
+      render();
+      AI.gameSpeak({ word: cur.word, round: g.round, history: gameHistory(g), onUsage: gameUsage })
+        .then(function (text) {
+          G.speak(g, cur.id, text);
+          ui.game.busy = false;
+          saveGame(); render(); scheduleTick(900);
+        })
+        .catch(function (err) {
+          ui.game.busy = false;
+          G.speak(g, cur.id, GAME_FALLBACK_LINES[Math.floor(Math.random() * GAME_FALLBACK_LINES.length)]);
+          saveGame(); render();
+          toast((err && err.message) || '它卡壳了，先随口说一句');
+          scheduleTick(900);
+        });
+      return;
+    }
+
+    if (g.phase === 'vote') {
+      var pend = G.pendingVoters(g);
+      var waitingMe = pend.some(function (p) { return p.isMe; });
+      var aiPend = pend.filter(function (p) { return !p.isMe; });
+
+      if (!aiPend.length) {
+        if (waitingMe) { render(); return; }
+        var r = G.resolveVote(g);
+        saveGame(); render();
+        if (g.winner) { finishGame(); return; }
+        scheduleTick(1800);
+        return;
+      }
+
+      var voter = aiPend[0];
+      var cands = G.alivePlayers(g)
+        .filter(function (p) { return p.id !== voter.id; })
+        .map(function (p) { return { id: p.id, name: p.name }; });
+
+      ui.game.busy = true;
+      render();
+      AI.gameVote({
+        name: voter.name,
+        word: voter.word,
+        round: g.round,
+        history: gameHistory(g),
+        candidates: cands,
+        onUsage: gameUsage
+      }).then(function (res) {
+        var target = null;
+        cands.forEach(function (c) { if (c.name === res.target) target = c.id; });
+        if (!target) target = cands[Math.floor(Math.random() * cands.length)].id;
+        G.vote(g, voter.id, target);
+        ui.game.busy = false;
+        saveGame(); render(); scheduleTick(650);
+      }).catch(function () {
+        var target2 = cands[Math.floor(Math.random() * cands.length)].id;
+        G.vote(g, voter.id, target2);
+        ui.game.busy = false;
+        saveGame(); render(); scheduleTick(650);
+      });
+      return;
+    }
+
+    if (g.phase === 'result') {
+      G.nextRound(g);
+      saveGame(); render(); scheduleTick(900);
+    }
+  }
+
+  function startGame() {
+    if (!(AI && AI.isReady())) {
+      openSettingsModal();
+      toast('先填一个 API Key，它们才演得起来');
+      return;
+    }
+    var pick = gamePick();
+    var players = [{ id: 'me', name: '你', emoji: '🙋', isMe: true }];
+
+    pick.companions.forEach(function (id) {
+      var c = C.findCompanion(state, id);
+      if (c) players.push({ id: 'c:' + c.id, name: c.name, emoji: c.emoji, companionId: c.id });
+    });
+    pick.npcs.forEach(function (n) {
+      players.push({ id: 'n:' + n.name, name: n.name, emoji: n.emoji });
+    });
+
+    if (players.length < G.MIN_PLAYERS) { toast('至少 4 个人才能开局'); return; }
+    if (players.length > G.MAX_PLAYERS) { toast('最多 6 个人'); return; }
+
+    try {
+      state.game = G.createGame(players);
+    } catch (err) {
+      toast(err.message);
+      return;
+    }
+
+    ui.game.paused = false;
+    ui.game.busy = false;
+    saveGame();
+    render();
+    scheduleTick(500);
+  }
+
+  function submitMySpeech(text) {
+    var g = state.game;
+    if (!g) return;
+    var me = G.me(g);
+    var t = String(text || '').trim();
+    if (!t) return;
+    if (!G.speak(g, me.id, t.slice(0, 60))) { toast('现在还没轮到你'); return; }
+    saveGame();
+    render();
+    scheduleTick(500);
+  }
+
+  function castVote(id) {
+    var g = state.game;
+    if (!g) return;
+    var me = G.me(g);
+    if (!G.vote(g, me.id, id)) { toast('这票投不出去'); return; }
+    saveGame();
+    render();
+    scheduleTick(500);
+  }
+
+  function finishGame() {
+    var g = state.game;
+    if (!g || g.summarized) return;
+    g.summarized = true;
+
+    var s = G.buildSummary(g);
+    var host = g.players.filter(function (p) { return p.companionId; })[0];
+    var hostId = host ? host.companionId : (ui.companionId !== 'all' ? ui.companionId : null);
+
+    var added = 0;
+    if (hostId && C.findCompanion(state, hostId)) {
+      C.upsertEntry(state, {
+        companionId: hostId,
+        date: C.todayISO(),
+        title: s.title,
+        mood: g.winner === 'civilian' ? '开心' : '心动',
+        tags: ['游戏', '谁是卧底'],
+        body: s.body,
+        quotes: [],
+        hook: '',
+        author: 'me'
+      });
+    }
+
+    s.memories.forEach(function (m) {
+      if (!C.findCompanion(state, m.companionId)) return;
+      if (C.hasMemory(state, m.companionId, m.text)) return;
+      C.addMemory(state, m);
+      added += 1;
+    });
+
+    persist();
+    saveGame();
+    if (ui.view === 'game') render();
+    toast('记下来了：一篇日记' + (added ? ' + ' + added + ' 条记忆' : ''));
+  }
+
+  function quitGame() {
+    if (!window.confirm('离开牌桌？这局就不算数了。')) return;
+    clearTimeout(ui.game.timer);
+    state.game = null;
+    ui.game.paused = false;
+    ui.game.busy = false;
+    saveGame();
+    render();
   }
 
   /* ---------------------------- 从聊天记录生成 ---------------------------- */
@@ -1720,6 +2119,45 @@
       case 'scan-memory': return scanMemories();
       case 'merge-memory':
         return mergeMemories(el.getAttribute('data-a'), el.getAttribute('data-b'));
+      case 'toggle-pick': {
+        var pick = gamePick();
+        var idx = pick.companions.indexOf(el.getAttribute('data-id'));
+        if (idx >= 0) pick.companions.splice(idx, 1);
+        else {
+          if (1 + pick.companions.length + pick.npcs.length >= G.MAX_PLAYERS) { toast('最多 6 个人'); return; }
+          pick.companions.push(el.getAttribute('data-id'));
+        }
+        return render();
+      }
+      case 'add-npc': {
+        var p2 = gamePick();
+        if (1 + p2.companions.length + p2.npcs.length >= G.MAX_PLAYERS) { toast('最多 6 个人'); return; }
+        var used = p2.npcs.map(function (n) { return n.name; })
+          .concat(state.companions.map(function (c) { return c.name; }));
+        var pool = G.NPC_POOL.filter(function (n) { return used.indexOf(n.name) < 0; });
+        if (!pool.length) { toast('临时 NPC 用完了'); return; }
+        p2.npcs.push(pool[Math.floor(Math.random() * pool.length)]);
+        return render();
+      }
+      case 'drop-npc': {
+        var p3 = gamePick();
+        p3.npcs.splice(Number(el.getAttribute('data-i')), 1);
+        return render();
+      }
+      case 'start-game': return startGame();
+      case 'cast-vote': return castVote(id);
+      case 'toggle-pause':
+        ui.game.paused = !ui.game.paused;
+        render();
+        if (!ui.game.paused) scheduleTick(400);
+        return;
+      case 'quit-game': return quitGame();
+      case 'game-again': {
+        clearTimeout(ui.game.timer);
+        state.game = null;
+        saveGame();
+        return render();
+      }
       case 'pick-persona': {
         var pForm = el.closest('form');
         var p = PERSONAS[Number(el.getAttribute('data-i'))];
@@ -1776,6 +2214,11 @@
       if (!cf2) return;
       commitMemory(cf2.companionId, cf2.kind, cf2.text, cf2.top.memory.id);
       toast('用新的替换掉了旧的');
+      return;
+    }
+
+    if (form.dataset.form === 'game-speak') {
+      submitMySpeech(form.elements.text.value);
       return;
     }
 
@@ -1870,14 +2313,17 @@
     els.file = byId('import-file');
 
     load();
+    state.game = loadStoredGame();
     ui.companionId = state.activeCompanionId || (state.companions[0] ? state.companions[0].id : 'all');
 
     // 支持 #memories / #pack 直接打开某个视图（方便分享和截图）
     var hash = (location.hash || '').replace(/^#/, '');
-    if (hash === 'memories' || hash === 'pack' || hash === 'diary' || hash === 'chat') ui.view = hash;
+    if (hash === 'memories' || hash === 'pack' || hash === 'diary' || hash === 'chat' || hash === 'game') ui.view = hash;
 
     bind();
     render();
+
+    if (state.game && !state.game.winner) scheduleTick(1200);
 
     // 打开应用时补写它自己的那篇（关掉网页就不会跑）
     setTimeout(autoSelfWriteTick, 2500);
