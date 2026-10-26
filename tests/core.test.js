@@ -371,6 +371,28 @@ test('高峰期开关：高峰时不自动写，优惠时段照写', () => {
   assert.equal(C.selfWriteDue(s, peak).due, true, '关掉开关就随时写');
 });
 
+test('法定节假日：全天优惠，哪怕是工作日', () => {
+  // 2026 春节 2/15–2/23，其中 2/23 是周一
+  assert.equal(C.isCnHoliday('2026-02-23'), true, '春节最后一天是周一');
+  assert.equal(C.isPeakHour(Date.UTC(2026, 1, 23, 2, 0)), false, '春节期间的周一 10:00 也是优惠');
+  assert.equal(C.isCnHoliday('2026-10-05'), true, '国庆');
+  assert.equal(C.isPeakHour(Date.UTC(2026, 9, 5, 7, 0)), false, '国庆期间的周一 15:00 也是优惠');
+  assert.equal(C.isCnHoliday('2026-05-05'), true, '劳动节最后一天');
+  assert.equal(C.isCnHoliday('2026-10-08'), false, '国庆结束后的周四正常上班');
+  assert.equal(C.isPeakHour(Date.UTC(2026, 9, 8, 2, 0)), true, '10/8 上午恢复高峰');
+});
+
+test('节假日用北京时间判断，不受设备时区影响', () => {
+  // UTC 2026-10-06 17:00 = 北京 2026-10-07 01:00，仍属国庆
+  assert.equal(C.beijingDateStr(Date.UTC(2026, 9, 6, 17, 0)), '2026-10-07');
+  assert.equal(C.isCnHoliday(C.beijingDateStr(Date.UTC(2026, 9, 6, 17, 0))), true);
+  // 跨过国庆最后一天：北京 10/08 00:30
+  assert.equal(C.beijingDateStr(Date.UTC(2026, 9, 7, 16, 30)), '2026-10-08');
+  assert.equal(C.isCnHoliday(C.beijingDateStr(Date.UTC(2026, 9, 7, 16, 30))), false);
+  // 调休上班的周六，按官方规则仍是周末 → 优惠
+  assert.equal(C.isPeakHour(Date.UTC(2026, 9, 10, 2, 0)), false, '10/10 周六调休上班，仍算优惠');
+});
+
 test('记忆相似度：能找出同一件事的两种说法', () => {
   assert.ok(C.memorySimilarity('我不吃香菜，奶茶三分糖', '我不吃香菜，奶茶要三分糖去冰') > 0.6);
   assert.ok(C.memorySimilarity('喜欢被叫鱼鱼', '今天天气很好') < 0.2);
