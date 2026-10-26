@@ -1194,11 +1194,13 @@
         ('0' + proLastRun.getHours()).slice(-2) + ':' + ('0' + proLastRun.getMinutes()).slice(-2)
       : '还没主动说过话';
     var peakNow = C.isPeakHour(Date.now());
-    var peakNote = sw.peakPause
-      ? (peakNow
-        ? '现在是高峰时段（原价），不会自动写；' + C.nextOffPeakText() + ' 起才写。'
-        : '现在是优惠时段（半价），可以自动写。')
-      : '高峰期也写，按原价计费。';
+    var holidayToday = C.isCnHoliday(C.beijingDateStr(Date.now()));
+    var peakNote = (holidayToday ? '今天是法定节假日，官方全天按优惠价。' : '') +
+      (sw.peakPause
+        ? (peakNow
+          ? '现在是高峰时段（原价），不会自动写；' + C.nextOffPeakText() + ' 起才写。'
+          : '现在是优惠时段（半价），可以自动写。')
+        : '高峰期也写，按原价计费。');
 
     openModal(
       '<form class="modal" data-form="settings">' +
@@ -1249,7 +1251,7 @@
             '</div>' +
             '<div class="pack-facts">今天自述已用 <b>' + used + '</b> / <b>' + sw.dailyTokens + '</b> tokens · 上次写于 <b>' + lastRunText + '</b>' +
               '<br>高峰：工作日 ' + esc(C.peakWindowsText()) + '（原价）；其余时间半价，周末和法定节假日全天优惠。' +
-              '<br>' + esc(peakNote) + '</div>' +
+              '<br>' + esc(peakNote) + ' <span class="f-note">节假日按国务院 2026 年安排</span></div>' +
             '<div class="pack-actions">' +
               '<button type="button" class="btn line sm" data-action="self-write">现在写一篇</button>' +
               '<span class="f-note">网页关掉后它不会自己跑；额度用完当天就停。</span>' +
